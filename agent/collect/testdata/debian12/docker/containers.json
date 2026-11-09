@@ -1,0 +1,51 @@
+[
+ {
+  "Id": "02e1da4ec1a474997760a4074ea471bb0da68306d306fa0bd4301996adf16a30",
+  "Names": [
+   "/homeassistant"
+  ],
+  "Image": "ghcr.io/home-assistant/home-assistant:2024.11.1",
+  "ImageID": "sha256:6e8d5677d0c48ea006d596a45c72941b9d0e072dc7809f7c38813535d692d928",
+  "Command": "/entrypoint.sh",
+  "Created": 1730000000,
+  "Ports": [],
+  "Labels": {
+   "com.docker.compose.config-hash": "e245c20b2b8f4b5d2666f83f51c47623fd73281be863f919cd99e78cbdca3ef1",
+   "com.docker.compose.container-number": "1",
+   "com.docker.compose.depends_on": "",
+   "com.docker.compose.image": "sha256:6e8d5677d0c48ea006d596a45c72941b9d0e072dc7809f7c38813535d692d928",
+   "com.docker.compose.oneoff": "False",
+   "com.docker.compose.project": "ha",
+   "com.docker.compose.project.config_files": "/root/ha/docker-compose.yml",
+   "com.docker.compose.project.working_dir": "/root/ha",
+   "com.docker.compose.service": "homeassistant",
+   "com.docker.compose.version": "2.29.1"
+  },
+  "State": "running",
+  "Status": "Up 13 days",
+  "HostConfig": {
+   "NetworkMode": "ha_default"
+  },
+  "NetworkSettings": {
+   "Networks": {}
+  },
+  "Mounts": [
+   {
+    "Type": "bind",
+    "Source": "/tank/data/ha",
+    "Destination": "/config",
+    "Mode": "",
+    "RW": true,
+    "Propagation": "rprivate"
+   },
+   {
+    "Type": "bind",
+    "Source": "/run/dbus",
+    "Destination": "/run/dbus",
+    "Mode": "ro",
+    "RW": false,
+    "Propagation": "rprivate"
+   }
+  ]
+ }
+]

@@ -1,0 +1,8 @@
+linux-image-6.1.0-26-amd64	6.1.112-1	installed
+linux-image-6.1.0-27-amd64	6.1.115-1	installed
+docker.io	20.10.24+dfsg1-1+b3	installed
+docker-compose	1.29.2-3	installed
+containerd	1.6.20~ds1-1+b1	installed
+zfs-dkms	2.1.11-1	installed
+zfsutils-linux	2.1.11-1	installed
+dkms	3.0.10-8+deb12u1	installed

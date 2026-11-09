@@ -1,0 +1,8 @@
+sysfs /sys sysfs rw,nosuid,nodev,noexec,relatime 0 0
+proc /proc proc rw,relatime 0 0
+udev /dev devtmpfs rw,nosuid,relatime,size=990000k,nr_inodes=247500,mode=755,inode64 0 0
+/dev/vda1 / ext4 rw,relatime,errors=remount-ro 0 0
+/dev/vda15 /boot/efi vfat rw,relatime,fmask=0022,dmask=0022,codepage=437,iocharset=ascii,shortname=mixed,utf8,errors=remount-ro 0 0
+tank /tank zfs rw,xattr,noacl 0 0
+/dev/vdb /var/lib/docker btrfs rw,relatime,space_cache=v2,subvolid=5,subvol=/ 0 0
+/dev/vdb /var/lib/docker/btrfs btrfs rw,relatime,space_cache=v2,subvolid=5,subvol=/ 0 0

@@ -1,0 +1,28 @@
+Reading package lists...
+Building dependency tree...
+Reading state information...
+Calculating upgrade...
+The following NEW packages will be installed:
+  linux-image-6.1.0-28-amd64
+The following packages have been kept back:
+  zfs-dkms zfsutils-linux
+The following packages will be upgraded:
+  base-files libc-bin libc6 linux-image-amd64 openssh-client openssh-server
+  openssh-sftp-server
+7 upgraded, 1 newly installed, 0 to remove and 2 not upgraded.
+Inst base-files [12.4+deb12u7] (12.4+deb12u8 Debian:12.8/stable [amd64])
+Inst libc6 [2.36-9+deb12u8] (2.36-9+deb12u9 Debian:12.8/stable [amd64]) [libc-bin:amd64 ]
+Inst libc-bin [2.36-9+deb12u8] (2.36-9+deb12u9 Debian:12.8/stable [amd64])
+Inst openssh-sftp-server [1:9.2p1-2+deb12u3] (1:9.2p1-2+deb12u4 Debian-Security:12/stable-security [amd64]) []
+Inst openssh-server [1:9.2p1-2+deb12u3] (1:9.2p1-2+deb12u4 Debian-Security:12/stable-security [amd64]) []
+Inst openssh-client [1:9.2p1-2+deb12u3] (1:9.2p1-2+deb12u4 Debian-Security:12/stable-security [amd64])
+Inst linux-image-6.1.0-28-amd64 (6.1.119-1 Debian-Security:12/stable-security [amd64])
+Inst linux-image-amd64 [6.1.115-1] (6.1.119-1 Debian-Security:12/stable-security [amd64])
+Conf base-files (12.4+deb12u8 Debian:12.8/stable [amd64])
+Conf libc6 (2.36-9+deb12u9 Debian:12.8/stable [amd64])
+Conf libc-bin (2.36-9+deb12u9 Debian:12.8/stable [amd64])
+Conf openssh-client (1:9.2p1-2+deb12u4 Debian-Security:12/stable-security [amd64])
+Conf openssh-sftp-server (1:9.2p1-2+deb12u4 Debian-Security:12/stable-security [amd64])
+Conf openssh-server (1:9.2p1-2+deb12u4 Debian-Security:12/stable-security [amd64])
+Conf linux-image-6.1.0-28-amd64 (6.1.119-1 Debian-Security:12/stable-security [amd64])
+Conf linux-image-amd64 (6.1.119-1 Debian-Security:12/stable-security [amd64])

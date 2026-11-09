@@ -1,0 +1,42 @@
+[Unit]
+Description=upkeeper.sh agent (read-only staleness report)
+Documentation=https://upkeeper.sh
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/upkeeper run
+Restart=always
+RestartSec=30s
+
+# Runs as root: the Docker socket and apt's state are root-only. M0 never
+# changes the system, so everything but its own config and cache is read-only.
+ConfigurationDirectory=upkeeper
+ConfigurationDirectoryMode=0700
+CacheDirectory=upkeeper
+CacheDirectoryMode=0700
+ReadWritePaths=-/etc/upkeeper
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+NoNewPrivileges=yes
+CapabilityBoundingSet=CAP_DAC_READ_SEARCH
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

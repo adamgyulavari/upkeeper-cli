@@ -1,0 +1,104 @@
+{
+ "sha256:6ce5684ae62d8098cec64f9a36cfcddcb23438f127ec944c77d84775cb582337": {
+  "Id": "sha256:6ce5684ae62d8098cec64f9a36cfcddcb23438f127ec944c77d84775cb582337",
+  "RepoTags": [
+   "ghcr.io/immich-app/immich-server:v1.119.0"
+  ],
+  "RepoDigests": [
+   "ghcr.io/immich-app/immich-server@sha256:4c489aa624084dc1c44e59c263a042f259eb6d96d438b45aaeed86ddf8966391"
+  ],
+  "Created": "2026-10-20T10:00:00Z",
+  "Size": 123456789,
+  "Architecture": "amd64",
+  "Os": "linux"
+ },
+ "sha256:0b74f64e1228e6580ffbb8c3eadf49c67987157f6941b49cab5fd5e1cefbdb38": {
+  "Id": "sha256:0b74f64e1228e6580ffbb8c3eadf49c67987157f6941b49cab5fd5e1cefbdb38",
+  "RepoTags": [
+   "tensorchord/pgvecto-rs:pg14-v0.2.0"
+  ],
+  "RepoDigests": [
+   "tensorchord/pgvecto-rs@sha256:90724186f0a3517cf6914295b5ab410db9ce23190a2d9d0b9dd6463e3fa298f0"
+  ],
+  "Created": "2026-10-20T10:00:00Z",
+  "Size": 123456789,
+  "Architecture": "amd64",
+  "Os": "linux"
+ },
+ "sha256:741dde0c3410cf41449ae9f6f15f290f331585a53d748cde7322814cd1c02c23": {
+  "Id": "sha256:741dde0c3410cf41449ae9f6f15f290f331585a53d748cde7322814cd1c02c23",
+  "RepoTags": [
+   "redis:6.2-alpine"
+  ],
+  "RepoDigests": [
+   "redis@sha256:aa31af2677dcbbfc6d38b9e2c8d532d93d8dcf79b4efc20471bffc3836548a07"
+  ],
+  "Created": "2026-10-20T10:00:00Z",
+  "Size": 123456789,
+  "Architecture": "amd64",
+  "Os": "linux"
+ },
+ "sha256:f678606853763e073a6cefe3c9607f7c205a8e00a73e64c125d63173e8fcb641": {
+  "Id": "sha256:f678606853763e073a6cefe3c9607f7c205a8e00a73e64c125d63173e8fcb641",
+  "RepoTags": [
+   "traefik:v2.11.2"
+  ],
+  "RepoDigests": [
+   "traefik@sha256:e8e501f89f0f2f599f12ced1bbfebd83217e6b9ce02df0ca70b718b5716f53e1"
+  ],
+  "Created": "2026-10-20T10:00:00Z",
+  "Size": 123456789,
+  "Architecture": "amd64",
+  "Os": "linux"
+ },
+ "sha256:6258558fcac85ca194cbd3e843c5fbb7efbdf08a6a0ff7fae8f5d9cbe02375ac": {
+  "Id": "sha256:6258558fcac85ca194cbd3e843c5fbb7efbdf08a6a0ff7fae8f5d9cbe02375ac",
+  "RepoTags": [
+   "traefik/whoami:v1.10"
+  ],
+  "RepoDigests": [
+   "traefik/whoami@sha256:f25297859cf0a70af5c053a5464a5fa647a35ceee1d91397331903846d79ffc1"
+  ],
+  "Created": "2026-10-20T10:00:00Z",
+  "Size": 123456789,
+  "Architecture": "amd64",
+  "Os": "linux"
+ },
+ "sha256:04516a964a9efdd7825cb939f14fc9fb88ae594a2591e1ebcdb01fdf40a36d5e": {
+  "Id": "sha256:04516a964a9efdd7825cb939f14fc9fb88ae594a2591e1ebcdb01fdf40a36d5e",
+  "RepoTags": [
+   "portainer/portainer-ce:latest"
+  ],
+  "RepoDigests": [
+   "portainer/portainer-ce@sha256:2e694789ac561d025e50e20d8caa71aee94ca922512b9d36d374074b5cb9b03d"
+  ],
+  "Created": "2026-10-20T10:00:00Z",
+  "Size": 123456789,
+  "Architecture": "amd64",
+  "Os": "linux"
+ },
+ "sha256:d2899ad274458946f8ad7dabcd1d3d64baf983f634d01565f1d6c28ae2d1de5e": {
+  "Id": "sha256:d2899ad274458946f8ad7dabcd1d3d64baf983f634d01565f1d6c28ae2d1de5e",
+  "RepoTags": [
+   "ghcr.io/example/backup:1.4.2"
+  ],
+  "RepoDigests": [
+   "ghcr.io/example/backup@sha256:02659ebe32a65d687db1fef72cf1690f0d8b331decfefcf05e3b68fb790e79b2"
+  ],
+  "Created": "2026-10-20T10:00:00Z",
+  "Size": 123456789,
+  "Architecture": "amd64",
+  "Os": "linux"
+ },
+ "sha256:98b1e7deffafa8e76581be1c358311769ef2d17174ee561f386a61b30c865720": {
+  "Id": "sha256:98b1e7deffafa8e76581be1c358311769ef2d17174ee561f386a61b30c865720",
+  "RepoTags": [
+   "shop-app"
+  ],
+  "RepoDigests": [],
+  "Created": "2026-10-20T10:00:00Z",
+  "Size": 123456789,
+  "Architecture": "amd64",
+  "Os": "linux"
+ }
+}

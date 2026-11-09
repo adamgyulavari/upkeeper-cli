@@ -1,0 +1,25 @@
+# Push a tag like v0.1.0 to publish a release. deploy/install.sh downloads
+# upkeeper_linux_<arch>, checksums.txt (and install.sh itself) from it.
+name: Release
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go vet ./... && go test ./...
+      - run: make build VERSION=${GITHUB_REF_NAME}
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            bin/upkeeper_linux_amd64 bin/upkeeper_linux_arm64 bin/checksums.txt deploy/install.sh \
+            --title "$GITHUB_REF_NAME" --generate-notes

@@ -1,0 +1,119 @@
+package discover
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"sort"
+
+	"github.com/adamgyulavari/upkeeper-cli/agent/collect"
+	"github.com/adamgyulavari/upkeeper-cli/agent/registry"
+	"github.com/adamgyulavari/upkeeper-cli/agent/versions"
+	"github.com/adamgyulavari/upkeeper-cli/protocol"
+)
+
+// ImageUpdate is one newer version (or digest) found for a running service.
+type ImageUpdate struct {
+	Project, Service string
+	Image            string // as written
+	FromTag, ToTag   string
+	Change           versions.Change // Patch | Minor | Major; Same for a new digest
+	NewDigest        bool
+	FromDigest       string
+	ToDigest         string
+}
+
+// Registry is the subset of registry.Client discovery needs.
+type Registry interface {
+	Tags(ctx context.Context, ref registry.Ref) ([]string, error)
+	Digest(ctx context.Context, ref registry.Ref, tag string) (string, error)
+	Skipped() map[string]error
+}
+
+// Images looks for newer tags and new digests on floating tags (A-06).
+// Pinned services are skipped: they're reported, never looked up.
+func Images(ctx context.Context, reg Registry, projects []protocol.Project, facts collect.DockerFacts, errs *collect.Errs) []ImageUpdate {
+	var out []ImageUpdate
+	reported := map[string]bool{}
+	note := func(key string, err error) {
+		if err == nil || errors.Is(err, registry.ErrUnavailable) || reported[key] {
+			return // unavailable registries get one line below
+		}
+		reported[key] = true
+		errs.Add("image "+key, err)
+	}
+	for _, p := range projects {
+		for _, s := range p.Services {
+			f := facts.Services[p.Name+"/"+s.Name]
+			if s.Pinned || f.Coolify || f.RefErr != nil || f.Ref.Repo == "" {
+				continue
+			}
+			if s.Digest == "" {
+				continue // built locally or never pulled: no registry to ask
+			}
+			ref := f.Ref
+			base := ImageUpdate{Project: p.Name, Service: s.Name, Image: s.Image, FromTag: ref.Tag, FromDigest: s.Digest}
+
+			cur, semver := versions.ParseTag(ref.Tag)
+			if semver && (cur.Prerelease() || (len(cur.Nums) == 1 && cur.Nums[0] >= 1000)) {
+				semver = false // rc builds and date/build-number tags: digest only
+			}
+			if semver {
+				tags, err := reg.Tags(ctx, ref)
+				note(ref.Familiar(), err)
+				if err == nil {
+					minor, major := NewerTags(cur, tags)
+					for _, t := range []string{minor, major} {
+						if t == "" {
+							continue
+						}
+						nt, _ := versions.ParseTag(t)
+						u := base
+						u.ToTag, u.Change = t, versions.Diff(cur, nt)
+						out = append(out, u)
+					}
+				}
+			}
+			if !semver || !cur.Precise() {
+				// floating tag (latest, release, 16, 1.2): did it move?
+				dg, err := reg.Digest(ctx, ref, ref.Tag)
+				note(ref.Familiar()+":"+ref.Tag, err)
+				if err == nil && dg != "" && dg != s.Digest {
+					u := base
+					u.ToTag, u.NewDigest, u.ToDigest = ref.Tag, true, dg
+					out = append(out, u)
+				}
+			}
+		}
+	}
+	skipped := reg.Skipped()
+	names := make([]string, 0, len(skipped))
+	for n := range skipped {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	for _, n := range names {
+		errs.Add("registry "+n, fmt.Errorf("skipped image checks: %v", skipped[n]))
+	}
+	return out
+}
+
+// NewerTags returns the newest compatible tag within the same major
+// (minor/patch) and the newest one with a higher major, if any.
+func NewerTags(cur versions.Tag, tags []string) (sameMajor, nextMajor string) {
+	var bestMinor, bestMajor versions.Tag
+	for _, s := range tags {
+		t, ok := versions.ParseTag(s)
+		if !ok || t.Prerelease() || !cur.Compatible(t) || versions.Compare(t, cur) <= 0 {
+			continue
+		}
+		if versions.Diff(cur, t) == versions.Major {
+			if bestMajor.Raw == "" || versions.Compare(t, bestMajor) > 0 {
+				bestMajor = t
+			}
+		} else if bestMinor.Raw == "" || versions.Compare(t, bestMinor) > 0 {
+			bestMinor = t
+		}
+	}
+	return bestMinor.Raw, bestMajor.Raw
+}

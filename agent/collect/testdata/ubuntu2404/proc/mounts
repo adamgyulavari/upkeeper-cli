@@ -1,0 +1,13 @@
+sysfs /sys sysfs rw,nosuid,nodev,noexec,relatime 0 0
+proc /proc proc rw,nosuid,nodev,noexec,relatime 0 0
+udev /dev devtmpfs rw,nosuid,relatime,size=4030112k,nr_inodes=1007528,mode=755,inode64 0 0
+tmpfs /run tmpfs rw,nosuid,nodev,noexec,relatime,size=813136k,mode=755,inode64 0 0
+/dev/sda1 / ext4 rw,relatime,discard,errors=remount-ro 0 0
+tmpfs /dev/shm tmpfs rw,nosuid,nodev,inode64 0 0
+/dev/sda16 /boot ext4 rw,relatime 0 0
+/dev/sda15 /boot/efi vfat rw,relatime,fmask=0077,dmask=0077,codepage=437,iocharset=iso8859-1,shortname=mixed,errors=remount-ro 0 0
+/dev/loop0 /snap/core22/1663 squashfs ro,nodev,relatime,errors=continue,threads=single 0 0
+/dev/sdb /mnt/HC_Volume_101234567 ext4 rw,relatime,discard 0 0
+/dev/sdb /srv/photos ext4 rw,relatime,discard 0 0
+overlay /var/lib/docker/overlay2/3f1c0e5a1b/merged overlay rw,relatime,lowerdir=/var/lib/docker/overlay2/l/ABC:/var/lib/docker/overlay2/l/DEF,upperdir=/var/lib/docker/overlay2/3f1c0e5a1b/diff,workdir=/var/lib/docker/overlay2/3f1c0e5a1b/work 0 0
+nsfs /run/docker/netns/1c2d3e4f nsfs rw 0 0

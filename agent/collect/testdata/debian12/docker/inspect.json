@@ -1,0 +1,76 @@
+{
+ "02e1da4ec1a474997760a4074ea471bb0da68306d306fa0bd4301996adf16a30": {
+  "Id": "02e1da4ec1a474997760a4074ea471bb0da68306d306fa0bd4301996adf16a30",
+  "Created": "2026-10-26T03:12:40.987654321Z",
+  "Path": "/entrypoint.sh",
+  "Args": [],
+  "State": {
+   "Status": "running",
+   "Running": true,
+   "Paused": false,
+   "Restarting": false,
+   "OOMKilled": false,
+   "Dead": false,
+   "Pid": 4242,
+   "ExitCode": 0,
+   "Error": "",
+   "StartedAt": "2026-10-26T03:12:44.123456789Z",
+   "FinishedAt": "0001-01-01T00:00:00Z"
+  },
+  "Image": "sha256:6e8d5677d0c48ea006d596a45c72941b9d0e072dc7809f7c38813535d692d928",
+  "Name": "/homeassistant",
+  "RestartCount": 0,
+  "Driver": "overlay2",
+  "Platform": "linux",
+  "HostConfig": {
+   "Binds": [
+    "/tank/data/ha:/config",
+    "/run/dbus:/run/dbus:ro"
+   ],
+   "NetworkMode": "ha_default",
+   "RestartPolicy": {
+    "Name": "unless-stopped",
+    "MaximumRetryCount": 0
+   },
+   "PortBindings": {}
+  },
+  "Mounts": [
+   {
+    "Type": "bind",
+    "Source": "/tank/data/ha",
+    "Destination": "/config",
+    "Mode": "",
+    "RW": true,
+    "Propagation": "rprivate"
+   },
+   {
+    "Type": "bind",
+    "Source": "/run/dbus",
+    "Destination": "/run/dbus",
+    "Mode": "ro",
+    "RW": false,
+    "Propagation": "rprivate"
+   }
+  ],
+  "Config": {
+   "Hostname": "02e1da4ec1a4",
+   "Image": "ghcr.io/home-assistant/home-assistant:2024.11.1",
+   "Labels": {
+    "com.docker.compose.config-hash": "e245c20b2b8f4b5d2666f83f51c47623fd73281be863f919cd99e78cbdca3ef1",
+    "com.docker.compose.container-number": "1",
+    "com.docker.compose.depends_on": "",
+    "com.docker.compose.image": "sha256:6e8d5677d0c48ea006d596a45c72941b9d0e072dc7809f7c38813535d692d928",
+    "com.docker.compose.oneoff": "False",
+    "com.docker.compose.project": "ha",
+    "com.docker.compose.project.config_files": "/root/ha/docker-compose.yml",
+    "com.docker.compose.project.working_dir": "/root/ha",
+    "com.docker.compose.service": "homeassistant",
+    "com.docker.compose.version": "2.29.1"
+   },
+   "Env": [
+    "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+   ],
+   "ExposedPorts": {}
+  }
+ }
+}

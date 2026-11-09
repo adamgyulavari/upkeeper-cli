@@ -1,0 +1,15 @@
+{
+ "sha256:6e8d5677d0c48ea006d596a45c72941b9d0e072dc7809f7c38813535d692d928": {
+  "Id": "sha256:6e8d5677d0c48ea006d596a45c72941b9d0e072dc7809f7c38813535d692d928",
+  "RepoTags": [
+   "ghcr.io/home-assistant/home-assistant:2024.11.1"
+  ],
+  "RepoDigests": [
+   "ghcr.io/home-assistant/home-assistant@sha256:c2dac5d8a39f0c1d47459b3daae1db604c66bf655f0d62b6dd1feb8736333f4f"
+  ],
+  "Created": "2026-10-20T10:00:00Z",
+  "Size": 123456789,
+  "Architecture": "amd64",
+  "Os": "linux"
+ }
+}

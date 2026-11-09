@@ -1,0 +1,11 @@
+linux-image-6.8.0-45-generic	6.8.0-45.45	installed
+linux-image-6.8.0-49-generic	6.8.0-49.49	installed
+linux-image-unsigned-6.8.0-31-generic		not-installed
+unattended-upgrades	2.9.1+nmu4ubuntu1	installed
+docker-ce	5:28.3.1-1~ubuntu.24.04~noble	installed
+docker-ce-cli	5:28.3.1-1~ubuntu.24.04~noble	installed
+docker.io		not-installed
+docker-compose-plugin	2.29.1-1~ubuntu.24.04~noble	installed
+docker-compose-v2		not-installed
+containerd.io	1.7.22-1	installed
+containerd		not-installed

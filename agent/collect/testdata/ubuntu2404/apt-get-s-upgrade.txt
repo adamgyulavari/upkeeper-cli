@@ -1,0 +1,55 @@
+Reading package lists...
+Building dependency tree...
+Reading state information...
+Calculating upgrade...
+The following NEW packages will be installed:
+  linux-headers-6.8.0-50 linux-headers-6.8.0-50-generic
+  linux-image-6.8.0-50-generic linux-modules-6.8.0-50-generic
+  linux-modules-extra-6.8.0-50-generic
+The following upgrades have been deferred due to phasing:
+  python3-distupgrade ubuntu-release-upgrader-core
+The following packages will be upgraded:
+  containerd.io docker-ce docker-ce-cli docker-compose-plugin libssl3t64
+  linux-generic linux-headers-generic linux-image-generic openssl tzdata
+  vim vim-common vim-runtime vim-tiny xxd
+15 upgraded, 5 newly installed, 0 to remove and 2 not upgraded.
+Inst libssl3t64 [3.0.13-0ubuntu3.4] (3.0.13-0ubuntu3.5 Ubuntu:24.04/noble-updates, Ubuntu:24.04/noble-security [amd64])
+Inst openssl [3.0.13-0ubuntu3.4] (3.0.13-0ubuntu3.5 Ubuntu:24.04/noble-updates, Ubuntu:24.04/noble-security [amd64])
+Inst tzdata [2024a-3ubuntu1.1] (2024b-0ubuntu0.24.04 Ubuntu:24.04/noble-updates [all])
+Inst vim [2:9.1.0016-1ubuntu7.3] (2:9.1.0016-1ubuntu7.4 Ubuntu:24.04/noble-updates, Ubuntu:24.04/noble-security [amd64]) []
+Inst vim-tiny [2:9.1.0016-1ubuntu7.3] (2:9.1.0016-1ubuntu7.4 Ubuntu:24.04/noble-updates, Ubuntu:24.04/noble-security [amd64]) []
+Inst vim-runtime [2:9.1.0016-1ubuntu7.3] (2:9.1.0016-1ubuntu7.4 Ubuntu:24.04/noble-updates, Ubuntu:24.04/noble-security [all]) []
+Inst xxd [2:9.1.0016-1ubuntu7.3] (2:9.1.0016-1ubuntu7.4 Ubuntu:24.04/noble-updates, Ubuntu:24.04/noble-security [amd64]) []
+Inst vim-common [2:9.1.0016-1ubuntu7.3] (2:9.1.0016-1ubuntu7.4 Ubuntu:24.04/noble-updates, Ubuntu:24.04/noble-security [all])
+Inst linux-modules-6.8.0-50-generic (6.8.0-50.51 Ubuntu:24.04/noble-updates, Ubuntu:24.04/noble-security [amd64])
+Inst linux-image-6.8.0-50-generic (6.8.0-50.51 Ubuntu:24.04/noble-updates, Ubuntu:24.04/noble-security [amd64])
+Inst linux-modules-extra-6.8.0-50-generic (6.8.0-50.51 Ubuntu:24.04/noble-updates, Ubuntu:24.04/noble-security [amd64])
+Inst linux-generic [6.8.0-49.49] (6.8.0-50.50 Ubuntu:24.04/noble-updates, Ubuntu:24.04/noble-security [amd64]) []
+Inst linux-image-generic [6.8.0-49.49] (6.8.0-50.50 Ubuntu:24.04/noble-updates, Ubuntu:24.04/noble-security [amd64]) []
+Inst linux-headers-6.8.0-50 (6.8.0-50.51 Ubuntu:24.04/noble-updates, Ubuntu:24.04/noble-security [all])
+Inst linux-headers-6.8.0-50-generic (6.8.0-50.51 Ubuntu:24.04/noble-updates, Ubuntu:24.04/noble-security [amd64])
+Inst linux-headers-generic [6.8.0-49.49] (6.8.0-50.50 Ubuntu:24.04/noble-updates, Ubuntu:24.04/noble-security [amd64])
+Inst containerd.io [1.7.22-1] (1.7.24-1 Docker CE:noble [amd64])
+Inst docker-ce-cli [5:28.3.1-1~ubuntu.24.04~noble] (5:28.3.3-1~ubuntu.24.04~noble Docker CE:noble [amd64])
+Inst docker-ce [5:28.3.1-1~ubuntu.24.04~noble] (5:28.3.3-1~ubuntu.24.04~noble Docker CE:noble [amd64])
+Inst docker-compose-plugin [2.29.1-1~ubuntu.24.04~noble] (2.29.7-1~ubuntu.24.04~noble Docker CE:noble [amd64])
+Conf libssl3t64 (3.0.13-0ubuntu3.5 Ubuntu:24.04/noble-updates, Ubuntu:24.04/noble-security [amd64])
+Conf openssl (3.0.13-0ubuntu3.5 Ubuntu:24.04/noble-updates, Ubuntu:24.04/noble-security [amd64])
+Conf tzdata (2024b-0ubuntu0.24.04 Ubuntu:24.04/noble-updates [all])
+Conf vim-common (2:9.1.0016-1ubuntu7.4 Ubuntu:24.04/noble-updates, Ubuntu:24.04/noble-security [all])
+Conf xxd (2:9.1.0016-1ubuntu7.4 Ubuntu:24.04/noble-updates, Ubuntu:24.04/noble-security [amd64])
+Conf vim-runtime (2:9.1.0016-1ubuntu7.4 Ubuntu:24.04/noble-updates, Ubuntu:24.04/noble-security [all])
+Conf vim (2:9.1.0016-1ubuntu7.4 Ubuntu:24.04/noble-updates, Ubuntu:24.04/noble-security [amd64])
+Conf vim-tiny (2:9.1.0016-1ubuntu7.4 Ubuntu:24.04/noble-updates, Ubuntu:24.04/noble-security [amd64])
+Conf linux-modules-6.8.0-50-generic (6.8.0-50.51 Ubuntu:24.04/noble-updates, Ubuntu:24.04/noble-security [amd64])
+Conf linux-image-6.8.0-50-generic (6.8.0-50.51 Ubuntu:24.04/noble-updates, Ubuntu:24.04/noble-security [amd64])
+Conf linux-modules-extra-6.8.0-50-generic (6.8.0-50.51 Ubuntu:24.04/noble-updates, Ubuntu:24.04/noble-security [amd64])
+Conf linux-image-generic (6.8.0-50.50 Ubuntu:24.04/noble-updates, Ubuntu:24.04/noble-security [amd64])
+Conf linux-headers-6.8.0-50 (6.8.0-50.51 Ubuntu:24.04/noble-updates, Ubuntu:24.04/noble-security [all])
+Conf linux-headers-6.8.0-50-generic (6.8.0-50.51 Ubuntu:24.04/noble-updates, Ubuntu:24.04/noble-security [amd64])
+Conf linux-headers-generic (6.8.0-50.50 Ubuntu:24.04/noble-updates, Ubuntu:24.04/noble-security [amd64])
+Conf linux-generic (6.8.0-50.50 Ubuntu:24.04/noble-updates, Ubuntu:24.04/noble-security [amd64])
+Conf containerd.io (1.7.24-1 Docker CE:noble [amd64])
+Conf docker-ce-cli (5:28.3.3-1~ubuntu.24.04~noble Docker CE:noble [amd64])
+Conf docker-ce (5:28.3.3-1~ubuntu.24.04~noble Docker CE:noble [amd64])
+Conf docker-compose-plugin (2.29.7-1~ubuntu.24.04~noble Docker CE:noble [amd64])

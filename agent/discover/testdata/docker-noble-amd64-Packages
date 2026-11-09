@@ -1,0 +1,103 @@
+Package: containerd.io
+Architecture: amd64
+Version: 1.7.22-1
+Priority: optional
+Section: devel
+Maintainer: Containerd team <help@containerd.io>
+Installed-Size: 126148
+Provides: containerd, runc
+Depends: libc6 (>= 2.34), libseccomp2 (>= 2.5.0)
+Conflicts: containerd, runc
+Replaces: containerd, runc
+Filename: dists/noble/pool/stable/amd64/containerd.io_1.7.22-1_amd64.deb
+Size: 30256548
+SHA256: 2f1a4c2e1c51e6f0a7e3a3c6e7b0d2a1f6c1a1f3f0c1b5e4f2a6d8c9e0b1a2c3
+Description: An open and reliable container runtime
+
+Package: containerd.io
+Architecture: amd64
+Version: 1.7.24-1
+Priority: optional
+Section: devel
+Maintainer: Containerd team <help@containerd.io>
+Filename: dists/noble/pool/stable/amd64/containerd.io_1.7.24-1_amd64.deb
+Description: An open and reliable container runtime
+
+Package: docker-ce
+Architecture: amd64
+Version: 5:27.5.1-1~ubuntu.24.04~noble
+Priority: optional
+Section: admin
+Maintainer: Docker <support@docker.com>
+Depends: containerd.io (>= 1.6.24), docker-ce-cli, iptables, libseccomp2 (>= 2.3.0), libc6 (>= 2.34), libsystemd0
+Filename: dists/noble/pool/stable/amd64/docker-ce_27.5.1-1~ubuntu.24.04~noble_amd64.deb
+Description: Docker: the open-source application container engine
+
+Package: docker-ce
+Architecture: amd64
+Version: 5:28.3.1-1~ubuntu.24.04~noble
+Priority: optional
+Section: admin
+Maintainer: Docker <support@docker.com>
+Filename: dists/noble/pool/stable/amd64/docker-ce_28.3.1-1~ubuntu.24.04~noble_amd64.deb
+Description: Docker: the open-source application container engine
+
+Package: docker-ce
+Architecture: amd64
+Version: 5:28.3.3-1~ubuntu.24.04~noble
+Priority: optional
+Section: admin
+Maintainer: Docker <support@docker.com>
+Filename: dists/noble/pool/stable/amd64/docker-ce_28.3.3-1~ubuntu.24.04~noble_amd64.deb
+Description: Docker: the open-source application container engine
+
+Package: docker-ce
+Architecture: amd64
+Version: 5:28.5.2-1~ubuntu.24.04~noble
+Priority: optional
+Section: admin
+Maintainer: Docker <support@docker.com>
+Filename: dists/noble/pool/stable/amd64/docker-ce_28.5.2-1~ubuntu.24.04~noble_amd64.deb
+Description: Docker: the open-source application container engine
+
+Package: docker-ce
+Architecture: amd64
+Version: 5:29.0.0~rc.1-1~ubuntu.24.04~noble
+Priority: optional
+Section: admin
+Maintainer: Docker <support@docker.com>
+Filename: dists/noble/pool/test/amd64/docker-ce_29.0.0~rc.1-1~ubuntu.24.04~noble_amd64.deb
+Description: Docker: the open-source application container engine
+
+Package: docker-ce
+Architecture: amd64
+Version: 5:29.1.2-1~ubuntu.24.04~noble
+Priority: optional
+Section: admin
+Maintainer: Docker <support@docker.com>
+Filename: dists/noble/pool/stable/amd64/docker-ce_29.1.2-1~ubuntu.24.04~noble_amd64.deb
+Description: Docker: the open-source application container engine
+
+Package: docker-ce-cli
+Architecture: amd64
+Version: 5:29.1.2-1~ubuntu.24.04~noble
+Filename: dists/noble/pool/stable/amd64/docker-ce-cli_29.1.2-1~ubuntu.24.04~noble_amd64.deb
+Description: Docker CLI: the open-source application container engine
+
+Package: docker-compose-plugin
+Architecture: amd64
+Version: 2.29.1-1~ubuntu.24.04~noble
+Filename: dists/noble/pool/stable/amd64/docker-compose-plugin_2.29.1-1~ubuntu.24.04~noble_amd64.deb
+Description: Docker Compose (V2) plugin for the Docker CLI.
+
+Package: docker-compose-plugin
+Architecture: amd64
+Version: 2.29.7-1~ubuntu.24.04~noble
+Filename: dists/noble/pool/stable/amd64/docker-compose-plugin_2.29.7-1~ubuntu.24.04~noble_amd64.deb
+Description: Docker Compose (V2) plugin for the Docker CLI.
+
+Package: docker-compose-plugin
+Architecture: amd64
+Version: 2.31.0-1~ubuntu.24.04~noble
+Filename: dists/noble/pool/stable/amd64/docker-compose-plugin_2.31.0-1~ubuntu.24.04~noble_amd64.deb
+Description: Docker Compose (V2) plugin for the Docker CLI.

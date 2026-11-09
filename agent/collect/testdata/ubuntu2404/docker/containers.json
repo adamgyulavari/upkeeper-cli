@@ -1,0 +1,399 @@
+[
+ {
+  "Id": "6c1dc037d134a0ea848a84ac8a08eb0af239f54d48aef611373c602563219698",
+  "Names": [
+   "/immich_server"
+  ],
+  "Image": "ghcr.io/immich-app/immich-server:v1.119.0",
+  "ImageID": "sha256:6ce5684ae62d8098cec64f9a36cfcddcb23438f127ec944c77d84775cb582337",
+  "Command": "/entrypoint.sh",
+  "Created": 1730000000,
+  "Ports": [
+   {
+    "IP": "0.0.0.0",
+    "PrivatePort": 2283,
+    "PublicPort": 2283,
+    "Type": "tcp"
+   },
+   {
+    "IP": "::",
+    "PrivatePort": 2283,
+    "PublicPort": 2283,
+    "Type": "tcp"
+   }
+  ],
+  "Labels": {
+   "com.docker.compose.config-hash": "198bb880ed334f09bdf263b058bfe544d79c3e9e25493ed3d8e6d64d8160e374",
+   "com.docker.compose.container-number": "1",
+   "com.docker.compose.depends_on": "",
+   "com.docker.compose.image": "sha256:6ce5684ae62d8098cec64f9a36cfcddcb23438f127ec944c77d84775cb582337",
+   "com.docker.compose.oneoff": "False",
+   "com.docker.compose.project": "immich",
+   "com.docker.compose.project.config_files": "/opt/immich/docker-compose.yml",
+   "com.docker.compose.project.working_dir": "/opt/immich",
+   "com.docker.compose.service": "immich-server",
+   "com.docker.compose.version": "2.29.1"
+  },
+  "State": "running",
+  "Status": "Up 13 days (healthy)",
+  "HostConfig": {
+   "NetworkMode": "immich_default"
+  },
+  "NetworkSettings": {
+   "Networks": {}
+  },
+  "Mounts": [
+   {
+    "Type": "bind",
+    "Source": "/srv/photos/library",
+    "Destination": "/usr/src/app/upload",
+    "Mode": "",
+    "RW": true,
+    "Propagation": "rprivate"
+   },
+   {
+    "Type": "bind",
+    "Source": "/etc/localtime",
+    "Destination": "/etc/localtime",
+    "Mode": "ro",
+    "RW": false,
+    "Propagation": "rprivate"
+   }
+  ]
+ },
+ {
+  "Id": "a64876020d92aa0d478c517a372c732c1772f8584da8c7a68bd2f326f698a9bc",
+  "Names": [
+   "/immich_postgres"
+  ],
+  "Image": "docker.io/tensorchord/pgvecto-rs:pg14-v0.2.0@sha256:90724186f0a3517cf6914295b5ab410db9ce23190a2d9d0b9dd6463e3fa298f0",
+  "ImageID": "sha256:0b74f64e1228e6580ffbb8c3eadf49c67987157f6941b49cab5fd5e1cefbdb38",
+  "Command": "/entrypoint.sh",
+  "Created": 1730000000,
+  "Ports": [],
+  "Labels": {
+   "com.docker.compose.config-hash": "3b88dd088c954d027a18372f6eda0a2dcf853b172f4d21b3a15ba4fb2a96fa1c",
+   "com.docker.compose.container-number": "1",
+   "com.docker.compose.depends_on": "",
+   "com.docker.compose.image": "sha256:0b74f64e1228e6580ffbb8c3eadf49c67987157f6941b49cab5fd5e1cefbdb38",
+   "com.docker.compose.oneoff": "False",
+   "com.docker.compose.project": "immich",
+   "com.docker.compose.project.config_files": "/opt/immich/docker-compose.yml",
+   "com.docker.compose.project.working_dir": "/opt/immich",
+   "com.docker.compose.service": "database",
+   "com.docker.compose.version": "2.29.1"
+  },
+  "State": "running",
+  "Status": "Up 13 days (healthy)",
+  "HostConfig": {
+   "NetworkMode": "immich_default"
+  },
+  "NetworkSettings": {
+   "Networks": {}
+  },
+  "Mounts": [
+   {
+    "Type": "bind",
+    "Source": "/srv/photos/postgres",
+    "Destination": "/var/lib/postgresql/data",
+    "Mode": "",
+    "RW": true,
+    "Propagation": "rprivate"
+   }
+  ]
+ },
+ {
+  "Id": "b93217784fdf038817ceffabd9dff666aa0f60a1d5339440a2e6563222303f41",
+  "Names": [
+   "/immich_redis"
+  ],
+  "Image": "docker.io/redis:6.2-alpine",
+  "ImageID": "sha256:741dde0c3410cf41449ae9f6f15f290f331585a53d748cde7322814cd1c02c23",
+  "Command": "/entrypoint.sh",
+  "Created": 1730000000,
+  "Ports": [],
+  "Labels": {
+   "com.docker.compose.config-hash": "7ca3d6d5459c9a130ecf97d4cb676470717956b0869a12788d2caa35315e5677",
+   "com.docker.compose.container-number": "1",
+   "com.docker.compose.depends_on": "",
+   "com.docker.compose.image": "sha256:741dde0c3410cf41449ae9f6f15f290f331585a53d748cde7322814cd1c02c23",
+   "com.docker.compose.oneoff": "False",
+   "com.docker.compose.project": "immich",
+   "com.docker.compose.project.config_files": "/opt/immich/docker-compose.yml",
+   "com.docker.compose.project.working_dir": "/opt/immich",
+   "com.docker.compose.service": "redis",
+   "com.docker.compose.version": "2.29.1"
+  },
+  "State": "running",
+  "Status": "Up 13 days (healthy)",
+  "HostConfig": {
+   "NetworkMode": "immich_default"
+  },
+  "NetworkSettings": {
+   "Networks": {}
+  },
+  "Mounts": []
+ },
+ {
+  "Id": "ee5b7a2c8d6b38a4c31e593bdc9c5b2c98d89f9834bffc20791e570002913582",
+  "Names": [
+   "/traefik"
+  ],
+  "Image": "traefik:v2.11.2",
+  "ImageID": "sha256:f678606853763e073a6cefe3c9607f7c205a8e00a73e64c125d63173e8fcb641",
+  "Command": "/entrypoint.sh",
+  "Created": 1730000000,
+  "Ports": [
+   {
+    "IP": "0.0.0.0",
+    "PrivatePort": 80,
+    "PublicPort": 80,
+    "Type": "tcp"
+   },
+   {
+    "IP": "::",
+    "PrivatePort": 80,
+    "PublicPort": 80,
+    "Type": "tcp"
+   },
+   {
+    "IP": "0.0.0.0",
+    "PrivatePort": 443,
+    "PublicPort": 443,
+    "Type": "tcp"
+   },
+   {
+    "IP": "::",
+    "PrivatePort": 443,
+    "PublicPort": 443,
+    "Type": "tcp"
+   },
+   {
+    "IP": "0.0.0.0",
+    "PrivatePort": 443,
+    "PublicPort": 443,
+    "Type": "udp"
+   },
+   {
+    "IP": "::",
+    "PrivatePort": 443,
+    "PublicPort": 443,
+    "Type": "udp"
+   }
+  ],
+  "Labels": {
+   "com.docker.compose.config-hash": "6af0d440f621b905a29e8cafdf3b08af3fce846dc72c24af19d0952f861bae2f",
+   "com.docker.compose.container-number": "1",
+   "com.docker.compose.depends_on": "",
+   "com.docker.compose.image": "sha256:f678606853763e073a6cefe3c9607f7c205a8e00a73e64c125d63173e8fcb641",
+   "com.docker.compose.oneoff": "False",
+   "com.docker.compose.project": "proxy",
+   "com.docker.compose.project.config_files": "/opt/proxy/docker-compose.yml",
+   "com.docker.compose.project.working_dir": "/opt/proxy",
+   "com.docker.compose.service": "traefik",
+   "com.docker.compose.version": "2.29.1"
+  },
+  "State": "running",
+  "Status": "Up 13 days",
+  "HostConfig": {
+   "NetworkMode": "proxy_default"
+  },
+  "NetworkSettings": {
+   "Networks": {}
+  },
+  "Mounts": [
+   {
+    "Type": "bind",
+    "Source": "/var/run/docker.sock",
+    "Destination": "/var/run/docker.sock",
+    "Mode": "ro",
+    "RW": false,
+    "Propagation": "rprivate"
+   },
+   {
+    "Type": "bind",
+    "Source": "/opt/proxy/acme",
+    "Destination": "/acme",
+    "Mode": "",
+    "RW": true,
+    "Propagation": "rprivate"
+   }
+  ]
+ },
+ {
+  "Id": "ba28097ba019d9eaa181ac874cc486d7104feda2b66142df3f898902b8317750",
+  "Names": [
+   "/whoami"
+  ],
+  "Image": "traefik/whoami:v1.10",
+  "ImageID": "sha256:6258558fcac85ca194cbd3e843c5fbb7efbdf08a6a0ff7fae8f5d9cbe02375ac",
+  "Command": "/entrypoint.sh",
+  "Created": 1730000000,
+  "Ports": [],
+  "Labels": {
+   "com.docker.compose.config-hash": "7d3887a941f96ba69096a0bcfff9502ac1dfb1d42e9d94cffd0b568f5cdeae60",
+   "com.docker.compose.container-number": "1",
+   "com.docker.compose.depends_on": "",
+   "com.docker.compose.image": "sha256:6258558fcac85ca194cbd3e843c5fbb7efbdf08a6a0ff7fae8f5d9cbe02375ac",
+   "com.docker.compose.oneoff": "False",
+   "com.docker.compose.project": "proxy",
+   "com.docker.compose.project.config_files": "/opt/proxy/docker-compose.yml",
+   "com.docker.compose.project.working_dir": "/opt/proxy",
+   "com.docker.compose.service": "whoami",
+   "com.docker.compose.version": "2.29.1",
+   "upkeeper.policy": "pin"
+  },
+  "State": "running",
+  "Status": "Up 13 days",
+  "HostConfig": {
+   "NetworkMode": "proxy_default"
+  },
+  "NetworkSettings": {
+   "Networks": {}
+  },
+  "Mounts": []
+ },
+ {
+  "Id": "07aec9c6063cd574d0bb03b5bba04f7b344c799bde11f1b8aa900c335f582d8b",
+  "Names": [
+   "/portainer"
+  ],
+  "Image": "portainer/portainer-ce:latest",
+  "ImageID": "sha256:04516a964a9efdd7825cb939f14fc9fb88ae594a2591e1ebcdb01fdf40a36d5e",
+  "Command": "/entrypoint.sh",
+  "Created": 1730000000,
+  "Ports": [
+   {
+    "IP": "0.0.0.0",
+    "PrivatePort": 9443,
+    "PublicPort": 9443,
+    "Type": "tcp"
+   },
+   {
+    "IP": "::",
+    "PrivatePort": 9443,
+    "PublicPort": 9443,
+    "Type": "tcp"
+   },
+   {
+    "IP": "0.0.0.0",
+    "PrivatePort": 8000,
+    "PublicPort": 8000,
+    "Type": "tcp"
+   },
+   {
+    "IP": "::",
+    "PrivatePort": 8000,
+    "PublicPort": 8000,
+    "Type": "tcp"
+   }
+  ],
+  "Labels": {},
+  "State": "running",
+  "Status": "Up 13 days",
+  "HostConfig": {
+   "NetworkMode": "bridge"
+  },
+  "NetworkSettings": {
+   "Networks": {}
+  },
+  "Mounts": [
+   {
+    "Type": "volume",
+    "Source": "/var/lib/docker/volumes/portainer_data/_data",
+    "Destination": "/data",
+    "Mode": "z",
+    "RW": true,
+    "Propagation": "",
+    "Name": "portainer_data",
+    "Driver": "local"
+   },
+   {
+    "Type": "bind",
+    "Source": "/var/run/docker.sock",
+    "Destination": "/var/run/docker.sock",
+    "Mode": "",
+    "RW": true,
+    "Propagation": "rprivate"
+   }
+  ]
+ },
+ {
+  "Id": "3a3b22f2698aafe55709a868e4f4c7067f01b0dff765e4eebea2c29336c6ed41",
+  "Names": [
+   "/jobs-backup-1"
+  ],
+  "Image": "ghcr.io/example/backup:1.4.2",
+  "ImageID": "sha256:d2899ad274458946f8ad7dabcd1d3d64baf983f634d01565f1d6c28ae2d1de5e",
+  "Command": "/entrypoint.sh",
+  "Created": 1730000000,
+  "Ports": [],
+  "Labels": {
+   "com.docker.compose.config-hash": "e74f474b15a0e238eed340d125786c614ee729a13bfd4206bf900d448d58824a",
+   "com.docker.compose.container-number": "1",
+   "com.docker.compose.depends_on": "",
+   "com.docker.compose.image": "sha256:d2899ad274458946f8ad7dabcd1d3d64baf983f634d01565f1d6c28ae2d1de5e",
+   "com.docker.compose.oneoff": "False",
+   "com.docker.compose.project": "jobs",
+   "com.docker.compose.project.config_files": "/opt/jobs/docker-compose.yml",
+   "com.docker.compose.project.working_dir": "/opt/jobs",
+   "com.docker.compose.service": "backup",
+   "com.docker.compose.version": "2.29.1",
+   "upkeeper.policy": "supervised"
+  },
+  "State": "exited",
+  "Status": "Exited (0) 2 days ago",
+  "HostConfig": {
+   "NetworkMode": "jobs_default"
+  },
+  "NetworkSettings": {
+   "Networks": {}
+  },
+  "Mounts": []
+ },
+ {
+  "Id": "f52e7b2651329d32fa12eabcd8f29b8d507c22491187b00938db1fbf1f55ba19",
+  "Names": [
+   "/shop-app-1"
+  ],
+  "Image": "shop-app",
+  "ImageID": "sha256:98b1e7deffafa8e76581be1c358311769ef2d17174ee561f386a61b30c865720",
+  "Command": "/entrypoint.sh",
+  "Created": 1730000000,
+  "Ports": [
+   {
+    "IP": "0.0.0.0",
+    "PrivatePort": 3000,
+    "PublicPort": 8080,
+    "Type": "tcp"
+   },
+   {
+    "IP": "::",
+    "PrivatePort": 3000,
+    "PublicPort": 8080,
+    "Type": "tcp"
+   }
+  ],
+  "Labels": {
+   "com.docker.compose.config-hash": "45ddbb5d5b6e8c074e1e424cc9e3606e7ed01866a7fa152bb6d4d4b74eedbfd0",
+   "com.docker.compose.container-number": "1",
+   "com.docker.compose.depends_on": "",
+   "com.docker.compose.image": "sha256:98b1e7deffafa8e76581be1c358311769ef2d17174ee561f386a61b30c865720",
+   "com.docker.compose.oneoff": "False",
+   "com.docker.compose.project": "shop",
+   "com.docker.compose.project.config_files": "/home/deploy/shop/docker-compose.yml",
+   "com.docker.compose.project.working_dir": "/home/deploy/shop",
+   "com.docker.compose.service": "app",
+   "com.docker.compose.version": "2.29.1"
+  },
+  "State": "restarting",
+  "Status": "Exited (0) 2 days ago",
+  "HostConfig": {
+   "NetworkMode": "shop_default"
+  },
+  "NetworkSettings": {
+   "Networks": {}
+  },
+  "Mounts": []
+ }
+]
