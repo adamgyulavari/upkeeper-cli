@@ -14,7 +14,9 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/adamgyulavari/upkeeper-cli/agent/statefile"
@@ -29,8 +31,11 @@ const (
 // Store reads and writes the policy file and the freeze state.
 type Store struct {
 	Path     string // policy.yaml
-	StateDir string // holds frozen.json
+	StateDir string // holds frozen.json and runs.json
 	Now      func() time.Time
+	// OwnerUID is who must own policy.yaml and its directory (default root).
+	// Tests set it to their own uid.
+	OwnerUID *int
 }
 
 func (s Store) now() time.Time {
@@ -66,27 +71,90 @@ func ParseMode(v string) (protocol.Mode, error) {
 	return protocol.ModeObserve, fmt.Errorf("unknown mode %q (use observe, dry-run or auto)", v)
 }
 
-// Mode returns the local mode. A missing file means observe. A file that
-// can't be read or parsed also means observe, with the error, so a broken
-// file never allows more than the default.
-func (s Store) Mode() (protocol.Mode, error) {
-	b, err := os.ReadFile(s.path())
-	if errors.Is(err, fs.ErrNotExist) {
-		return protocol.ModeObserve, nil
-	}
-	if err != nil {
-		return protocol.ModeObserve, err
-	}
-	m, err := parseFile(b)
-	if err != nil {
-		return protocol.ModeObserve, fmt.Errorf("%s: %w", s.path(), err)
-	}
-	return m, nil
+// Settings is the content of policy.yaml.
+type Settings struct {
+	Mode   protocol.Mode
+	Window *Window // nil: no local window
 }
 
-func parseFile(b []byte) (protocol.Mode, error) {
-	var mode string
-	found := false
+// Mode returns the local mode. A missing file means observe. A file that
+// can't be read or parsed, or that isn't owned by root with no group or
+// world write permission (in a directory that's the same), also means
+// observe, with the error: a broken file never allows more than the default.
+func (s Store) Mode() (protocol.Mode, error) {
+	st, err := s.Load()
+	return st.Mode, err
+}
+
+// Load reads policy.yaml (see Mode for the fail-safe rules).
+func (s Store) Load() (Settings, error) {
+	obs := Settings{Mode: protocol.ModeObserve}
+	b, err := s.readChecked()
+	if errors.Is(err, fs.ErrNotExist) {
+		return obs, nil
+	}
+	if err != nil {
+		return obs, err
+	}
+	st, err := parseFile(b)
+	if err != nil {
+		return obs, fmt.Errorf("%s: %w", s.path(), err)
+	}
+	return st, nil
+}
+
+func (s Store) owner() int {
+	if s.OwnerUID != nil {
+		return *s.OwnerUID
+	}
+	return 0
+}
+
+// readChecked reads the policy file only if it and its directory are
+// owned by the expected user and not writable by group or others, and the
+// file is a regular file (not a symlink).
+func (s Store) readChecked() ([]byte, error) {
+	p := s.path()
+	fi, err := os.Lstat(p)
+	if err != nil {
+		return nil, err
+	}
+	if err := checkOwner(fi, s.owner(), false); err != nil {
+		return nil, fmt.Errorf("%s: %w, so the policy counts as observe", p, err)
+	}
+	di, err := os.Lstat(filepath.Dir(p))
+	if err != nil {
+		return nil, err
+	}
+	if err := checkOwner(di, s.owner(), true); err != nil {
+		return nil, fmt.Errorf("%s: %w, so the policy counts as observe", filepath.Dir(p), err)
+	}
+	return os.ReadFile(p)
+}
+
+func checkOwner(fi fs.FileInfo, uid int, dir bool) error {
+	if dir && !fi.IsDir() {
+		return errors.New("isn't a directory")
+	}
+	if !dir && !fi.Mode().IsRegular() {
+		return errors.New("isn't a regular file")
+	}
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		return errors.New("owner unknown")
+	}
+	if int(st.Uid) != uid {
+		return fmt.Errorf("is owned by uid %d, not %d", st.Uid, uid)
+	}
+	if fi.Mode().Perm()&0o022 != 0 {
+		return fmt.Errorf("is writable by group or others (mode %04o)", fi.Mode().Perm())
+	}
+	return nil
+}
+
+func parseFile(b []byte) (Settings, error) {
+	var mode, window string
+	found, foundWindow := false, false
 	sc := bufio.NewScanner(bytes.NewReader(b))
 	for n := 1; sc.Scan(); n++ {
 		line := sc.Text()
@@ -99,21 +167,41 @@ func parseFile(b []byte) (protocol.Mode, error) {
 		}
 		k, v, ok := strings.Cut(line, ":")
 		if !ok {
-			return protocol.ModeObserve, fmt.Errorf("line %d: expected `key: value`", n)
+			return Settings{Mode: protocol.ModeObserve}, fmt.Errorf("line %d: expected `key: value`", n)
 		}
 		k, v = strings.TrimSpace(k), strings.Trim(strings.TrimSpace(v), `"'`)
-		if k != "mode" {
-			return protocol.ModeObserve, fmt.Errorf("line %d: unknown setting %q", n, k)
+		switch k {
+		case "mode":
+			if found {
+				return Settings{Mode: protocol.ModeObserve}, fmt.Errorf("line %d: mode is set twice", n)
+			}
+			mode, found = v, true
+		case "window":
+			if foundWindow {
+				return Settings{Mode: protocol.ModeObserve}, fmt.Errorf("line %d: window is set twice", n)
+			}
+			window, foundWindow = v, true
+		default:
+			return Settings{Mode: protocol.ModeObserve}, fmt.Errorf("line %d: unknown setting %q", n, k)
 		}
-		if found {
-			return protocol.ModeObserve, fmt.Errorf("line %d: mode is set twice", n)
+	}
+	st := Settings{Mode: protocol.ModeObserve}
+	if foundWindow && window != "" && window != "none" {
+		w, err := ParseWindow(window)
+		if err != nil {
+			return st, err
 		}
-		mode, found = v, true
+		st.Window = &w
 	}
 	if !found {
-		return protocol.ModeObserve, nil
+		return st, nil
 	}
-	return ParseMode(mode)
+	m, err := ParseMode(mode)
+	if err != nil {
+		return Settings{Mode: protocol.ModeObserve}, err
+	}
+	st.Mode = m
+	return st, nil
 }
 
 const header = `# upkeeper.sh local policy. Change it with ` + "`sudo upkeeper policy set <mode>`" + `.
@@ -122,16 +210,51 @@ const header = `# upkeeper.sh local policy. Change it with ` + "`sudo upkeeper p
 #   dry-run  go through every step of a maintenance run, but change nothing
 #   auto     apply updates that can be undone automatically
 #
+# window (optional) limits runs to a local maintenance window, in this
+# server's time zone, for example "sun 03:00-05:00", "mon,thu 02:00-04:00"
+# or "daily 03:00-04:00". Set it with: sudo upkeeper policy window "<window>"
+#
 # Automatic runs also need "Automatic runs" switched on in the dashboard.
 # The dashboard can never allow more than this file does.
 `
 
-// SetMode writes the policy file.
-func (s Store) SetMode(m protocol.Mode) error {
-	if _, err := ParseMode(string(m)); err != nil {
+// Save writes the policy file (root only, 0644).
+func (s Store) Save(st Settings) error {
+	if _, err := ParseMode(string(st.Mode)); err != nil {
 		return err
 	}
-	return statefile.Write(s.path(), []byte(header+"mode: "+string(m)+"\n"), 0o644, 0o700)
+	body := header + "mode: " + string(st.Mode) + "\n"
+	if st.Window != nil {
+		body += "window: \"" + st.Window.String() + "\"\n"
+	}
+	return statefile.Write(s.path(), []byte(body), 0o644, 0o755)
+}
+
+// SetMode changes the mode and keeps the window. A file that can't be read
+// is replaced (it counted as observe anyway).
+func (s Store) SetMode(m protocol.Mode) error {
+	st, _ := s.Load()
+	st.Mode = m
+	return s.Save(st)
+}
+
+// SetWindow changes the window (nil removes it) and keeps the mode.
+func (s Store) SetWindow(w *Window) error {
+	st, err := s.Load()
+	if err != nil {
+		return err
+	}
+	st.Window = w
+	return s.Save(st)
+}
+
+// ModTime is when policy.yaml last changed (zero if it doesn't exist).
+func (s Store) ModTime() time.Time {
+	fi, err := os.Lstat(s.path())
+	if err != nil {
+		return time.Time{}
+	}
+	return fi.ModTime()
 }
 
 // Freeze is the content of frozen.json.
@@ -169,9 +292,13 @@ func (s Store) Unfreeze() error {
 
 // Report is the policy as it goes into a report.
 func (s Store) Report() *protocol.Policy {
-	m, _ := s.Mode()
+	st, _ := s.Load()
 	f := s.Frozen()
-	return &protocol.Policy{Mode: m, Frozen: f.Frozen, FrozenReason: f.Reason}
+	p := &protocol.Policy{Mode: st.Mode, Frozen: f.Frozen, FrozenReason: f.Reason}
+	if st.Window != nil {
+		p.Window = st.Window.String()
+	}
+	return p
 }
 
 // Effective is the mode a job runs in: the narrower of the local policy and

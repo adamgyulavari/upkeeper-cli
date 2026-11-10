@@ -11,7 +11,9 @@ import (
 
 func store(t *testing.T) Store {
 	d := t.TempDir()
-	return Store{Path: filepath.Join(d, "etc", "policy.yaml"), StateDir: filepath.Join(d, "state")}
+	os.Chmod(d, 0o755)
+	uid := os.Getuid()
+	return Store{Path: filepath.Join(d, "etc", "policy.yaml"), StateDir: filepath.Join(d, "state"), OwnerUID: &uid}
 }
 
 func TestDefaultIsObserve(t *testing.T) {
@@ -50,6 +52,7 @@ func TestBrokenFileMeansObserve(t *testing.T) {
 	} {
 		os.MkdirAll(filepath.Dir(s.Path), 0o700)
 		os.WriteFile(s.Path, []byte(content), 0o600)
+		os.Chmod(s.Path, 0o600)
 		if m, err := s.Mode(); m != protocol.ModeObserve || err == nil {
 			t.Errorf("%q: got %s %v, want observe with an error", content, m, err)
 		}
