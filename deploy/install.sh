@@ -1,18 +1,24 @@
 #!/bin/sh
 # upkeeper.sh agent installer.
 #
-#   curl -fsSL upkeeper.sh | sh -s -- <enroll-token>
-#   curl -fsSL upkeeper.sh | sh -s -- <enroll-token> --url http://localhost:8080
+#   curl --proto '=https' --tlsv1.2 -fsSL https://upkeeper.sh | UPKEEPER_ENROLL_TOKEN=<token> sh
+#   curl --proto '=https' --tlsv1.2 -fsSL https://upkeeper.sh | sh -s -- <enroll-token>
 #
-# Downloads the agent from GitHub releases, checks its sha256, installs
-# /usr/local/bin/upkeeper and a systemd unit, then enrolls this server.
+# Downloads the agent from GitHub releases, checks the release signature on
+# checksums.txt (ssh-keygen -Y verify, against the key embedded below), checks
+# the binary's sha256, installs /usr/local/bin/upkeeper and a systemd unit,
+# then enrolls this server. The local policy starts as observe (report only).
 # Run it again without a token to upgrade the agent in place.
 #
 # Options (or environment):
 #   --url URL        control plane (UPKEEPER_URL, default https://upkeeper.sh)
 #   --version vX.Y.Z release to install (UPKEEPER_VERSION, default latest)
 #   --no-start       install and enroll, but don't start the service
-# Also: UPKEEPER_DOWNLOAD_BASE overrides the release download URL (mirrors, tests).
+#   --token-stdin    read the enroll token from the first line of stdin
+# The enroll token can also come from UPKEEPER_ENROLL_TOKEN, which keeps it
+# out of the process list and shell history.
+# Also: UPKEEPER_DOWNLOAD_BASE overrides the release download URL (mirrors, tests);
+# UPKEEPER_INSECURE_SKIP_SIGNATURE=1 skips the signature check (not recommended).
 #
 # Everything is inside main() so a cut-off download runs nothing.
 
@@ -22,6 +28,14 @@ REPO="adamgyulavari/upkeeper-cli"
 BIN_DIR="/usr/local/bin"
 UNIT_PATH="/etc/systemd/system/upkeeper.service"
 CONFIG_PATH="/etc/upkeeper/agent.json"
+POLICY_PATH="/etc/upkeeper/policy.yaml"
+
+# The release signing key (ssh-keygen allowed_signers format). Releases sign
+# checksums.txt with: ssh-keygen -Y sign -n upkeeper-release -f <key> checksums.txt
+# PLACEHOLDER until the founder publishes the real key; with the placeholder
+# every install fails closed unless UPKEEPER_INSECURE_SKIP_SIGNATURE=1.
+SIGNER_ID="release@upkeeper.sh"
+ALLOWED_SIGNERS='release@upkeeper.sh namespaces="upkeeper-release" ssh-ed25519 PLACEHOLDER-REPLACE-WITH-THE-RELEASE-PUBLIC-KEY'
 
 say() { printf '%s\n' "upkeeper: $*"; }
 fail() { printf '%s\n' "upkeeper: $*" >&2; exit 1; }
@@ -30,7 +44,7 @@ unit_file() {
 	# Keep in sync with deploy/upkeeper.service (a test checks this).
 	cat <<'UNIT'
 [Unit]
-Description=upkeeper.sh agent (read-only staleness report)
+Description=upkeeper.sh agent
 Documentation=https://upkeeper.sh
 After=network-online.target docker.service
 Wants=network-online.target
@@ -40,48 +54,84 @@ Type=simple
 ExecStart=/usr/local/bin/upkeeper run
 Restart=always
 RestartSec=30s
+# If the service stops during a run, let apt-get or docker compose finish
+# instead of killing them halfway. The agent marks the run as stopped and
+# freezes the server when it starts again.
+KillMode=process
+TimeoutStopSec=90s
 
-# Runs as root: the Docker socket and apt's state are root-only. M0 never
-# changes the system, so everything but its own config and cache is read-only.
+# Runs as root: the Docker socket and apt are root-only. From M1 the agent
+# can upgrade packages (apt/dpkg write /usr, /etc, /boot, /var) and recreate
+# containers, so the M0 read-only sandbox can't stay. What's kept is below;
+# README.md (Security) lists what was dropped and why, and how to restore
+# the strict sandbox on servers that stay in observe mode.
 ConfigurationDirectory=upkeeper
 ConfigurationDirectoryMode=0700
 CacheDirectory=upkeeper
 CacheDirectoryMode=0700
-ReadWritePaths=-/etc/upkeeper
-ProtectSystem=strict
-ProtectHome=yes
+StateDirectory=upkeeper
+StateDirectoryMode=0700
+# The agent never writes its config or the local policy at runtime; only
+# root on the server does, with `upkeeper policy set`.
+ReadOnlyPaths=/etc/upkeeper
+ProtectHome=read-only
 PrivateTmp=yes
-PrivateDevices=yes
-NoNewPrivileges=yes
-CapabilityBoundingSet=CAP_DAC_READ_SEARCH
-ProtectKernelTunables=yes
-ProtectKernelModules=yes
 ProtectKernelLogs=yes
 ProtectControlGroups=yes
 ProtectClock=yes
 ProtectHostname=yes
-RestrictSUIDSGID=yes
 RestrictRealtime=yes
-RestrictNamespaces=yes
-RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 LockPersonality=yes
-MemoryDenyWriteExecute=yes
 SystemCallArchitectures=native
-UMask=0077
+# apt, dpkg and docker compose run inside this cgroup too.
+MemoryMax=1G
+TasksMax=512
+UMask=0022
 
 [Install]
 WantedBy=multi-user.target
 UNIT
 }
 
+is_local_http() {
+	case "$1" in
+		http://localhost:*|http://localhost/*|http://127.0.0.1:*|http://127.0.0.1/*) return 0 ;;
+	esac
+	return 1
+}
+
 download() { # url dest
+	# https only, including redirects. Plain http only for a local test server.
+	proto='=https'
+	if is_local_http "$1"; then proto='=http,https'; fi
 	if command -v curl >/dev/null 2>&1; then
-		curl -fsSL --proto '=https,http' --retry 3 -o "$2" "$1"
+		curl -fsSL --proto "$proto" --proto-redir "$proto" --tlsv1.2 --retry 3 -o "$2" "$1"
 	elif command -v wget >/dev/null 2>&1; then
-		wget -q -O "$2" "$1"
+		if is_local_http "$1"; then
+			wget -q -O "$2" "$1"
+		else
+			wget -q --https-only --secure-protocol=TLSv1_2 -O "$2" "$1"
+		fi
 	else
 		fail "needs curl or wget to download the agent."
 	fi
+}
+
+verify_signature() { # checksums sig
+	if [ "${UPKEEPER_INSECURE_SKIP_SIGNATURE:-}" = "1" ]; then
+		say "WARNING: skipping the release signature check (UPKEEPER_INSECURE_SKIP_SIGNATURE=1). Only the checksum is checked."
+		return 0
+	fi
+	case "$ALLOWED_SIGNERS" in
+		*PLACEHOLDER*) fail "this installer has no release signing key yet, so it can't check the release signature. Nothing was installed. (UPKEEPER_INSECURE_SKIP_SIGNATURE=1 skips the check.)" ;;
+	esac
+	[ -s "$2" ] || fail "the release has no checksums.txt.sig, so its signature can't be checked. Nothing was installed."
+	command -v ssh-keygen >/dev/null 2>&1 || fail "needs ssh-keygen (openssh-client) to check the release signature. Nothing was installed."
+	printf '%s\n' "$ALLOWED_SIGNERS" > "$tmp/allowed_signers"
+	ssh-keygen -Y verify -f "$tmp/allowed_signers" -I "$SIGNER_ID" -n upkeeper-release -s "$2" < "$1" >/dev/null 2>&1 \
+		|| fail "the release signature on checksums.txt doesn't verify. Nothing was installed."
+	say "release signature ok."
 }
 
 sha256_of() {
@@ -99,6 +149,7 @@ main() {
 	url="${UPKEEPER_URL:-https://upkeeper.sh}"
 	version="${UPKEEPER_VERSION:-latest}"
 	start=1
+	token_stdin=0
 	while [ $# -gt 0 ]; do
 		case "$1" in
 			--url) [ $# -ge 2 ] || fail "--url needs a value"; url="$2"; shift 2 ;;
@@ -106,11 +157,19 @@ main() {
 			--version) [ $# -ge 2 ] || fail "--version needs a value"; version="$2"; shift 2 ;;
 			--version=*) version="${1#--version=}"; shift ;;
 			--no-start) start=0; shift ;;
-			-h|--help) sed -n '2,16p' "$0" 2>/dev/null || true; exit 0 ;;
+			--token-stdin) token_stdin=1; shift ;;
+			-h|--help) sed -n '2,24p' "$0" 2>/dev/null || true; exit 0 ;;
 			-*) fail "unknown option $1" ;;
 			*) [ -z "$token" ] || fail "only one enroll token, please"; token="$1"; shift ;;
 		esac
 	done
+
+	if [ -z "$token" ] && [ -n "${UPKEEPER_ENROLL_TOKEN:-}" ]; then
+		token="$UPKEEPER_ENROLL_TOKEN"
+	fi
+	if [ "$token_stdin" -eq 1 ]; then
+		IFS= read -r token || true
+	fi
 
 	[ "$(uname -s)" = "Linux" ] || fail "the agent runs on Linux only."
 
@@ -152,6 +211,8 @@ main() {
 	say "downloading ${asset} (${version}) …"
 	download "${base}/${asset}" "$tmp/upkeeper" || fail "download failed: ${base}/${asset}"
 	download "${base}/checksums.txt" "$tmp/checksums.txt" || fail "download failed: ${base}/checksums.txt"
+	download "${base}/checksums.txt.sig" "$tmp/checksums.txt.sig" 2>/dev/null || : > "$tmp/checksums.txt.sig"
+	verify_signature "$tmp/checksums.txt" "$tmp/checksums.txt.sig"
 
 	want="$(awk -v a="$asset" '$2 == a || $2 == "*"a { print $1 }' "$tmp/checksums.txt")"
 	[ -n "$want" ] || fail "checksums.txt has no entry for ${asset}."
@@ -165,10 +226,15 @@ main() {
 	$SUDO install -m 0755 "$tmp/upkeeper" "$BIN_DIR/upkeeper"
 	say "installed $("$BIN_DIR/upkeeper" version)."
 
-	$SUDO install -d -m 0700 /etc/upkeeper /var/cache/upkeeper
+	$SUDO install -d -m 0700 /etc/upkeeper /var/cache/upkeeper /var/lib/upkeeper
+	if ! $SUDO test -f "$POLICY_PATH"; then
+		$SUDO "$BIN_DIR/upkeeper" policy set observe >/dev/null
+		say "local policy: observe (reports only). See: upkeeper policy show"
+	fi
 
 	if [ -n "$token" ]; then
-		$SUDO "$BIN_DIR/upkeeper" enroll "$token" --url "$url"
+		# The token goes in on stdin, never on a command line.
+		printf '%s\n' "$token" | $SUDO "$BIN_DIR/upkeeper" enroll - --url "$url"
 	elif $SUDO test -f "$CONFIG_PATH"; then
 		say "already enrolled; keeping ${CONFIG_PATH}."
 	else
@@ -190,7 +256,7 @@ main() {
 	else
 		say "systemd isn't running here, so no service was installed. Run 'upkeeper run' under your own supervisor."
 	fi
-	say "done. This version only reads and reports; it changes nothing on this server."
+	say "done. The local policy is observe: the agent reports and changes nothing until you run 'sudo upkeeper policy set dry-run' (or auto) and switch on automatic runs in the dashboard."
 }
 
 main "$@"

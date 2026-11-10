@@ -1,7 +1,9 @@
-# Publishes a release when VERSION changes on main (or when run by hand).
+# Creates a DRAFT release when VERSION changes on main (or when run by hand).
 # The workflow creates the tag v<VERSION> itself; if that release already
-# exists, it does nothing. deploy/install.sh downloads upkeeper_linux_<arch>,
-# checksums.txt (and install.sh itself) from the latest release.
+# exists, it does nothing. A draft is not "latest", so installers don't see
+# it until the founder signs checksums.txt offline, uploads
+# checksums.txt.sig and publishes it (docs/RELEASING.md). deploy/install.sh
+# refuses releases without a valid signature.
 name: Release
 on:
   push:
@@ -35,12 +37,18 @@ jobs:
       - if: steps.exists.outputs.skip != 'true'
         run: go vet ./... && go test ./...
       - if: steps.exists.outputs.skip != 'true'
-        run: make build VERSION=${{ steps.v.outputs.tag }}
+        env:
+          ROOT_KEYS: ${{ vars.UPKEEPER_ROOT_KEYS }}
+        run: |
+          if [ -z "$ROOT_KEYS" ]; then
+            echo "::warning::UPKEEPER_ROOT_KEYS is not set: this build accepts no jobs."
+          fi
+          make build VERSION=${{ steps.v.outputs.tag }} ROOT_KEYS="$ROOT_KEYS"
       - if: steps.exists.outputs.skip != 'true'
-        name: Publish release
+        name: Create draft release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "${{ steps.v.outputs.tag }}" \
             bin/upkeeper_linux_amd64 bin/upkeeper_linux_arm64 bin/checksums.txt deploy/install.sh \
-            --target "$GITHUB_SHA" --title "${{ steps.v.outputs.tag }}" --generate-notes
+            --target "$GITHUB_SHA" --title "${{ steps.v.outputs.tag }}" --generate-notes --draft

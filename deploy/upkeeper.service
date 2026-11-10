@@ -1,5 +1,5 @@
 [Unit]
-Description=upkeeper.sh agent (read-only staleness report)
+Description=upkeeper.sh agent
 Documentation=https://upkeeper.sh
 After=network-online.target docker.service
 Wants=network-online.target
@@ -9,34 +9,40 @@ Type=simple
 ExecStart=/usr/local/bin/upkeeper run
 Restart=always
 RestartSec=30s
+# If the service stops during a run, let apt-get or docker compose finish
+# instead of killing them halfway. The agent marks the run as stopped and
+# freezes the server when it starts again.
+KillMode=process
+TimeoutStopSec=90s
 
-# Runs as root: the Docker socket and apt's state are root-only. M0 never
-# changes the system, so everything but its own config and cache is read-only.
+# Runs as root: the Docker socket and apt are root-only. From M1 the agent
+# can upgrade packages (apt/dpkg write /usr, /etc, /boot, /var) and recreate
+# containers, so the M0 read-only sandbox can't stay. What's kept is below;
+# README.md (Security) lists what was dropped and why, and how to restore
+# the strict sandbox on servers that stay in observe mode.
 ConfigurationDirectory=upkeeper
 ConfigurationDirectoryMode=0700
 CacheDirectory=upkeeper
 CacheDirectoryMode=0700
-ReadWritePaths=-/etc/upkeeper
-ProtectSystem=strict
-ProtectHome=yes
+StateDirectory=upkeeper
+StateDirectoryMode=0700
+# The agent never writes its config or the local policy at runtime; only
+# root on the server does, with `upkeeper policy set`.
+ReadOnlyPaths=/etc/upkeeper
+ProtectHome=read-only
 PrivateTmp=yes
-PrivateDevices=yes
-NoNewPrivileges=yes
-CapabilityBoundingSet=CAP_DAC_READ_SEARCH
-ProtectKernelTunables=yes
-ProtectKernelModules=yes
 ProtectKernelLogs=yes
 ProtectControlGroups=yes
 ProtectClock=yes
 ProtectHostname=yes
-RestrictSUIDSGID=yes
 RestrictRealtime=yes
-RestrictNamespaces=yes
-RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 LockPersonality=yes
-MemoryDenyWriteExecute=yes
 SystemCallArchitectures=native
-UMask=0077
+# apt, dpkg and docker compose run inside this cgroup too.
+MemoryMax=1G
+TasksMax=512
+UMask=0022
 
 [Install]
 WantedBy=multi-user.target
