@@ -34,8 +34,10 @@ type EnrollResponse struct {
 	ServerID    string `json:"server_id"`
 	AgentToken  string `json:"agent_token"` // long-lived; stored 0600 in /etc/upkeeper/agent.json
 	ReportEvery int    `json:"report_every_seconds"`
-	// Protocol 2: the control plane's job-signing key, pinned by the agent.
-	JobKey   string `json:"job_key,omitempty"` // base64 Ed25519 public key
+	// Deprecated: agents no longer pin a key from enrollment; jobs carry a
+	// KeyCert signed by a root key compiled into the agent. Kept so older
+	// control planes still decode; agents ignore it.
+	JobKey   string `json:"job_key,omitempty"`
 	JobKeyID string `json:"job_key_id,omitempty"`
 }
 
@@ -61,6 +63,16 @@ type Policy struct {
 	Mode         Mode   `json:"mode"`
 	Frozen       bool   `json:"frozen"`
 	FrozenReason string `json:"frozen_reason,omitempty"`
+	// Window is the local maintenance window from policy.yaml, if set
+	// ("sun 03:00-05:00", server time). Jobs outside it are rejected.
+	Window string `json:"window,omitempty"`
+	// RootKeyIDs are the root keys this agent build trusts; empty means it
+	// accepts no jobs.
+	RootKeyIDs []string `json:"root_key_ids,omitempty"`
+	// JobKeyID and JobKeyFingerprint describe the online key of the last
+	// job that verified.
+	JobKeyID          string `json:"job_key_id,omitempty"`
+	JobKeyFingerprint string `json:"job_key_fingerprint,omitempty"`
 }
 
 // Mode is what the local policy allows.
@@ -75,8 +87,7 @@ const (
 type ReportAck struct {
 	OK          bool `json:"ok"`
 	ReportEvery int  `json:"report_every_seconds"`
-	// Protocol 2: lets agents enrolled under protocol 1 pin the key
-	// (trust on first use).
+	// Deprecated: ignored by agents (see EnrollResponse.JobKey).
 	JobKey   string `json:"job_key,omitempty"`
 	JobKeyID string `json:"job_key_id,omitempty"`
 }

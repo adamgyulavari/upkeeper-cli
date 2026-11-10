@@ -41,11 +41,14 @@ type Job struct {
 }
 
 // SignedJob is the wire form: Payload is the exact JSON of a Job that was
-// signed, so both sides verify the same bytes.
+// signed, so both sides verify the same bytes. Cert certifies the online
+// key that signed it; the agent accepts it only if an embedded root key
+// signed the cert (see KeyCert).
 type SignedJob struct {
-	KeyID     string `json:"key_id"`
-	Payload   []byte `json:"payload"`
-	Signature []byte `json:"signature"`
+	KeyID     string   `json:"key_id"`
+	Payload   []byte   `json:"payload"`
+	Signature []byte   `json:"signature"`
+	Cert      *KeyCert `json:"cert,omitempty"`
 }
 
 // ItemKey identifies an update across reports and jobs.
@@ -68,14 +71,41 @@ var (
 	ErrExpired      = errors.New("job has expired")
 	ErrNotYet       = errors.New("job is not valid yet")
 	ErrWrongServer  = errors.New("job is for another server")
+	ErrNoCert       = errors.New("job has no key certificate")
+	ErrBadCert      = errors.New("job key certificate isn't signed by a trusted root key")
+	ErrCertExpired  = errors.New("job key certificate is outside its validity period")
+	ErrLifetime     = errors.New("job is valid for longer than allowed")
+	ErrIssuedFuture = errors.New("job was issued in the future")
+	ErrBadWindow    = errors.New("job's window ends after the job expires")
 )
 
-// VerifyJob checks the signature, key, server and validity window, and
-// returns the job. now is the agent's clock; a few minutes of skew are allowed.
-func VerifyJob(pub ed25519.PublicKey, keyID, serverID string, sj SignedJob, now time.Time) (Job, error) {
-	if sj.KeyID != keyID {
+const (
+	// Skew is the clock difference allowed between agent and control plane.
+	Skew = 5 * time.Minute
+	// MaxJobLifetime is the longest ExpiresAt − IssuedAt an agent accepts.
+	MaxJobLifetime = 6 * time.Hour
+)
+
+// VerifyJob checks a job end to end and returns it:
+//   - sj.Cert is signed by one of roots and its validity covers now;
+//   - the job is signed by the certified key (KeyID must match the cert);
+//   - it's for serverID, IssuedAt isn't in the future, NotBefore/ExpiresAt
+//     cover now, it lives at most MaxJobLifetime, and WindowEnd isn't after
+//     ExpiresAt.
+//
+// now is the agent's clock; Skew is allowed. Replay protection (a job ID
+// used once) is the agent's job: see agent/jobs.
+func VerifyJob(roots []RootKey, serverID string, sj SignedJob, now time.Time) (Job, error) {
+	if sj.Cert == nil {
+		return Job{}, ErrNoCert
+	}
+	if err := sj.Cert.Verify(roots, now); err != nil {
+		return Job{}, err
+	}
+	if sj.KeyID != sj.Cert.KeyID {
 		return Job{}, ErrWrongKey
 	}
+	pub := ed25519.PublicKey(sj.Cert.PublicKey)
 	if len(pub) != ed25519.PublicKeySize || !ed25519.Verify(pub, sj.Payload, sj.Signature) {
 		return Job{}, ErrBadSignature
 	}
@@ -86,12 +116,20 @@ func VerifyJob(pub ed25519.PublicKey, keyID, serverID string, sj SignedJob, now 
 	if j.ServerID != serverID {
 		return Job{}, ErrWrongServer
 	}
-	const skew = 5 * time.Minute
-	if now.Add(skew).Before(j.NotBefore) {
+	if j.IssuedAt.After(now.Add(Skew)) {
+		return Job{}, ErrIssuedFuture
+	}
+	if now.Add(Skew).Before(j.NotBefore) {
 		return Job{}, ErrNotYet
 	}
 	if now.After(j.ExpiresAt) {
 		return Job{}, ErrExpired
+	}
+	if j.IssuedAt.IsZero() || j.ExpiresAt.Sub(j.IssuedAt) > MaxJobLifetime {
+		return Job{}, ErrLifetime
+	}
+	if !j.WindowEnd.IsZero() && j.WindowEnd.After(j.ExpiresAt) {
+		return Job{}, ErrBadWindow
 	}
 	return j, nil
 }
