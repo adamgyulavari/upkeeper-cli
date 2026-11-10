@@ -142,3 +142,23 @@ func (c *Client) Image(ctx context.Context, id string) (Image, error) {
 	err := c.get(ctx, "/images/"+url.PathEscape(id)+"/json", nil, &im)
 	return im, err
 }
+
+// Logs returns up to tail lines of a container's stdout and stderr since a
+// point in time, as the raw stream (non-TTY containers have 8-byte frame
+// headers; callers only search the text).
+func (c *Client) Logs(ctx context.Context, id string, since time.Time, tail int) ([]byte, error) {
+	q := url.Values{"stdout": {"1"}, "stderr": {"1"}, "since": {fmt.Sprint(since.Unix())}, "tail": {fmt.Sprint(tail)}}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.Base+"/containers/"+url.PathEscape(id)+"/logs?"+q.Encode(), nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("GET logs: %s", resp.Status)
+	}
+	return io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+}
