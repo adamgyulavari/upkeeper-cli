@@ -22,6 +22,11 @@ type Config struct {
 	ServerID    string `json:"server_id"`
 	AgentToken  string `json:"agent_token"`
 	ReportEvery int    `json:"report_every_seconds"`
+	// JobKey is the control plane's job-signing key (base64 Ed25519),
+	// pinned at enrollment or, for servers enrolled under protocol 1, on
+	// first use from a ReportAck. It is never replaced silently.
+	JobKey   string `json:"job_key,omitempty"`
+	JobKeyID string `json:"job_key_id,omitempty"`
 }
 
 // ErrNotEnrolled means there is no config file yet.
