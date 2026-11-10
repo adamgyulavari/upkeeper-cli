@@ -7,12 +7,19 @@
 //	POST /v1/enroll   EnrollRequest → EnrollResponse   (no auth; one-time token in body)
 //	POST /v1/report   Report        → ReportAck        (Authorization: Bearer <agent token>)
 //
-// From M1 the agent also long-polls GET /v1/jobs for signed jobs.
+// From protocol 2 (M1) the agent also long-polls for signed jobs and reports
+// run progress; see jobs.go.
+//
+//	GET  /v1/jobs?wait=30          → 204 | 200 SignedJob   (Bearer agent token)
+//	POST /v1/runs/{job_id}/events  []RunEvent → 204       (append, idempotent by Seq)
+//	POST /v1/runs/{job_id}/result  RunResult → 204
+//
+// A control plane must accept reports from every version >= 1.
 package protocol
 
 import "time"
 
-const Version = 1
+const Version = 2
 
 // ---- enrollment ----
 
@@ -27,6 +34,9 @@ type EnrollResponse struct {
 	ServerID    string `json:"server_id"`
 	AgentToken  string `json:"agent_token"` // long-lived; stored 0600 in /etc/upkeeper/agent.json
 	ReportEvery int    `json:"report_every_seconds"`
+	// Protocol 2: the control plane's job-signing key, pinned by the agent.
+	JobKey   string `json:"job_key,omitempty"` // base64 Ed25519 public key
+	JobKeyID string `json:"job_key_id,omitempty"`
 }
 
 // ---- report (the staleness report's raw data) ----
@@ -42,11 +52,33 @@ type Report struct {
 	Risks           []Risk    `json:"risks"`
 	Items           []Item    `json:"items"`            // every pending update, classified
 	Errors          []string  `json:"errors,omitempty"` // collectors that failed; never fail the whole report
+	Policy          *Policy   `json:"policy,omitempty"` // protocol 2+
 }
+
+// Policy is the server's local policy (/etc/upkeeper/policy.yaml) as the
+// agent sees it. The control plane can never widen it.
+type Policy struct {
+	Mode         Mode   `json:"mode"`
+	Frozen       bool   `json:"frozen"`
+	FrozenReason string `json:"frozen_reason,omitempty"`
+}
+
+// Mode is what the local policy allows.
+type Mode string
+
+const (
+	ModeObserve Mode = "observe" // read-only (default after install)
+	ModeDryRun  Mode = "dry-run" // runs every step, but writes nothing
+	ModeAuto    Mode = "auto"    // may apply auto items
+)
 
 type ReportAck struct {
 	OK          bool `json:"ok"`
 	ReportEvery int  `json:"report_every_seconds"`
+	// Protocol 2: lets agents enrolled under protocol 1 pin the key
+	// (trust on first use).
+	JobKey   string `json:"job_key,omitempty"`
+	JobKeyID string `json:"job_key_id,omitempty"`
 }
 
 type System struct {

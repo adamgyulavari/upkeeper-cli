@@ -12,7 +12,7 @@ import (
 
 func TestVersion(t *testing.T) {
 	var out, errb bytes.Buffer
-	if code := run([]string{"version"}, &out, &errb); code != 0 || !strings.HasPrefix(out.String(), "upkeeper dev (protocol 1)") {
+	if code := run([]string{"version"}, &out, &errb); code != 0 || !strings.HasPrefix(out.String(), "upkeeper dev (protocol 2)") {
 		t.Errorf("code=%d out=%q", code, out.String())
 	}
 }
