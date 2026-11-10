@@ -19,10 +19,15 @@ type Runner interface {
 	Run(ctx context.Context, name string, args ...string) ([]byte, error)
 }
 
-// The read-only command allowlist. M0 contains no command that changes the
-// system: apt only simulates, with its on-disk caches switched off so it
-// writes nothing; dpkg-query, apt-mark showhold and systemctl list-units only
-// read; the Compose plugin is only asked for its version.
+// The command allowlist. Read-only commands: apt only simulates, with its
+// on-disk caches switched off so it writes nothing; dpkg-query, apt-mark
+// showhold and systemctl list-units only read; the Compose plugin is only
+// asked for its version.
+//
+// From M1 there are three write commands, each with one exact argument shape
+// (see writes.go): `apt-get update`, `apt-get … install --only-upgrade
+// pkg=version…` and `docker compose … up … <services>`. Only agent/run may
+// build them (a source-scan test enforces it).
 var (
 	// AptNoCache makes apt build its package cache in memory instead of
 	// writing /var/cache/apt/*.bin.
@@ -54,14 +59,16 @@ var (
 )
 
 // ErrNotAllowed is returned for any command outside the allowlist.
-var ErrNotAllowed = errors.New("command not in the read-only allowlist")
+var ErrNotAllowed = errors.New("command not in the allowlist")
 
-// Allowed reports whether name+args is one of the read-only commands above.
+// Allowed reports whether name+args is one of the commands above.
 func Allowed(name string, args []string) error {
 	ok := false
 	switch name {
 	case "apt-get":
-		ok = slices.Equal(args, AptSimulateUpgrade)
+		ok = slices.Equal(args, AptSimulateUpgrade) || aptWriteAllowed(args)
+	case "docker":
+		_, ok = ParseComposeUp(args)
 	case "apt-mark":
 		ok = slices.Equal(args, []string{"showhold"})
 	case "apt-cache":
@@ -96,6 +103,24 @@ type ExecRunner struct{}
 
 var searchPath = []string{"/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin", "/sbin", "/bin"}
 
+// Env is the complete environment of every command the agent runs. Nothing
+// is inherited from the agent's own environment.
+//   - C locale, so output is parseable;
+//   - apt and dpkg never ask questions (noninteractive, needrestart only
+//     lists services instead of restarting them, no changelog pager);
+//   - the Docker CLI reads its config from the agent's state directory, not
+//     from root's home, so a user's CLI settings can't change what runs.
+var Env = []string{
+	"PATH=" + strings.Join(searchPath, ":"),
+	"LC_ALL=C", "LANG=C",
+	"DEBIAN_FRONTEND=noninteractive",
+	"NEEDRESTART_MODE=l",
+	"APT_LISTCHANGES_FRONTEND=none",
+	"UCF_FORCE_CONFFOLD=1",
+	"DOCKER_CONFIG=/var/lib/upkeeper/docker-cli",
+	"HOME=/var/lib/upkeeper",
+}
+
 func (ExecRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
 	if err := Allowed(name, args); err != nil {
 		return nil, err
@@ -115,7 +140,8 @@ func (ExecRunner) Run(ctx context.Context, name string, args ...string) ([]byte,
 		}
 	}
 	cmd := exec.CommandContext(ctx, bin, args...)
-	cmd.Env = []string{"PATH=" + strings.Join(searchPath, ":"), "LC_ALL=C", "LANG=C", "DEBIAN_FRONTEND=noninteractive"}
+	cmd.Env = Env
+	cmd.Stdin = nil // /dev/null: nothing may ever wait for input
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
