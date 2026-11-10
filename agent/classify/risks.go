@@ -54,6 +54,22 @@ func Risks(in Input) []protocol.Risk {
 		add(RiskRebootPending, protocol.Warning, "kernel", msg)
 	}
 
+	var labelled []string
+	for k, f := range in.DockerFacts.Services {
+		if len(f.ImageComposeLabels) > 0 {
+			labelled = append(labelled, k)
+		}
+	}
+	sort.Strings(labelled)
+	for _, k := range labelled {
+		f := in.DockerFacts.Services[k]
+		msg := "Its image sets Docker Compose labels itself, so upkeeper.sh doesn't trust them to say which compose files it belongs to and leaves its image alone."
+		if f.LabelMismatch {
+			msg = "Its image sets Docker Compose labels that differ from the container's. upkeeper.sh doesn't trust either to say which compose files it belongs to and leaves its image alone."
+		}
+		add("image_compose_labels", protocol.Warning, k, msg)
+	}
+
 	if in.DockerFacts.CoolifyHost {
 		n := 0
 		for _, f := range in.DockerFacts.Services {

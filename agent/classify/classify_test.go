@@ -11,7 +11,7 @@ import (
 	"github.com/adamgyulavari/upkeeper-cli/protocol"
 )
 
-var ubuntu = protocol.System{OSID: "ubuntu", OSVersion: "26.04", Supported: true, KernelRunning: "6.8.0-49-generic"}
+var ubuntu = protocol.System{OSID: "ubuntu", OSVersion: "26.04", OSCodename: "resolute", Supported: true, KernelRunning: "6.8.0-49-generic"}
 
 func base() Input {
 	return Input{
@@ -40,7 +40,23 @@ func withService(in Input, image string, mounts []string, policy string, ups ...
 	return in
 }
 
-func apt(pkgs ...collect.AptUpgrade) collect.AptSim { return collect.AptSim{Upgrades: pkgs} }
+// apt builds a simulation; packages without origins come from the
+// distribution's own archive (Ubuntu resolute, or Debian stable).
+func apt(pkgs ...collect.AptUpgrade) collect.AptSim {
+	for i := range pkgs {
+		if pkgs[i].Origins == nil {
+			suite := "Ubuntu:26.04/resolute-updates"
+			if pkgs[i].Security {
+				suite = "Ubuntu:26.04/resolute-security"
+			}
+			if strings.HasSuffix(pkgs[i].Package, "-amd64") || strings.Contains(pkgs[i].To, "deb") {
+				suite = "Debian:13/stable"
+			}
+			pkgs[i].Origins = []string{suite}
+		}
+	}
+	return collect.AptSim{Upgrades: pkgs}
+}
 
 type want struct {
 	layer    protocol.Layer

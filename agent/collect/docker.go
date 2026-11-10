@@ -32,6 +32,28 @@ type ServiceFacts struct {
 	OOMKilled bool
 	BindIPs   map[string]string // "port/proto" → host IP it is published on
 	Coolify   bool              // managed by Coolify: Coolify updates it, upkeeper.sh leaves it alone
+	// MountDests are container paths of writable volumes and bind mounts.
+	MountDests []string
+	// ImageComposeLabels lists com.docker.compose.* labels the image itself
+	// sets. Container labels with those names may be inherited from the
+	// image rather than written by Compose, so they can't be trusted.
+	ImageComposeLabels []string
+	// LabelMismatch: the image sets a Compose label to a different value
+	// than the container has (Compose overwrote it).
+	LabelMismatch bool
+}
+
+// ImageComposeLabels returns the com.docker.compose.* labels an image
+// defines, sorted.
+func ImageComposeLabels(imageLabels map[string]string) []string {
+	var out []string
+	for k := range imageLabels {
+		if strings.HasPrefix(k, "com.docker.compose.") {
+			out = append(out, k)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // CoolifyManaged reports whether a container belongs to Coolify (Coolify
@@ -174,10 +196,10 @@ func Docker(ctx context.Context, env Env, api *dockerapi.Client, dpkg map[string
 		if ci.State.Health != nil && ci.State.Health.Status != "" {
 			svc.Health = ci.State.Health.Status
 		}
-		if ref.Digest != "" {
-			svc.Digest = ref.Digest
-		} else if ci.Image != "" {
-			im, ok := imageCache[ci.Image]
+		var im dockerapi.Image
+		if ci.Image != "" {
+			var ok bool
+			im, ok = imageCache[ci.Image]
 			if !ok {
 				im, err = api.Image(ctx, ci.Image)
 				if err != nil {
@@ -185,6 +207,17 @@ func Docker(ctx context.Context, env Env, api *dockerapi.Client, dpkg map[string
 				}
 				imageCache[ci.Image] = im
 			}
+		}
+		sf.MountDests = dataMountDests(ci.Mounts)
+		sf.ImageComposeLabels = ImageComposeLabels(im.Config.Labels)
+		for _, k := range sf.ImageComposeLabels {
+			if im.Config.Labels[k] != labels[k] {
+				sf.LabelMismatch = true
+			}
+		}
+		if ref.Digest != "" {
+			svc.Digest = ref.Digest
+		} else if ci.Image != "" {
 			for _, rd := range im.RepoDigests {
 				if refErr == nil && ref.SameRepo(rd) {
 					_, dg, _ := strings.Cut(rd, "@")
@@ -297,6 +330,18 @@ func dataMounts(ms []dockerapi.Mount) []string {
 			continue
 		}
 		out = append(out, m.Source)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// dataMountDests lists container paths of writable volumes and bind mounts.
+func dataMountDests(ms []dockerapi.Mount) []string {
+	out := []string{}
+	for _, m := range ms {
+		if m.RW && (m.Type == "volume" || m.Type == "bind") && m.Destination != "" {
+			out = append(out, m.Destination)
+		}
 	}
 	sort.Strings(out)
 	return out

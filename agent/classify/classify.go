@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/adamgyulavari/upkeeper-cli/agent/collect"
 	"github.com/adamgyulavari/upkeeper-cli/agent/discover"
@@ -31,6 +32,116 @@ func NoteKey(layer protocol.Layer, subject, to string) string {
 // Settings are per-server choices that can only make runs more cautious.
 type Settings struct {
 	SupervisedReboots bool
+	// MinReleaseAge holds back new images until this agent has known them
+	// for that long (0: no hold, as in tests).
+	MinReleaseAge time.Duration
+	// Now is the clock for MinReleaseAge; default time.Now.
+	Now func() time.Time
+}
+
+// DefaultMinReleaseAge is the hold for new images in real reports.
+const DefaultMinReleaseAge = 72 * time.Hour
+
+// TooNew reports whether an image update is still inside the minimum
+// release age, with a reason for the user.
+func (s Settings) TooNew(u discover.ImageUpdate) (bool, string) {
+	if s.MinReleaseAge <= 0 {
+		return false, ""
+	}
+	now := time.Now()
+	if s.Now != nil {
+		now = s.Now()
+	}
+	first := u.FirstSeen
+	if first.IsZero() {
+		first = now
+	}
+	age := now.Sub(first)
+	if age >= s.MinReleaseAge {
+		return false, ""
+	}
+	return true, fmt.Sprintf("Released %s ago; waits until it's %s old, so a bad release has time to be noticed and pulled.", humanAge(age), humanAge(s.MinReleaseAge))
+}
+
+func humanAge(d time.Duration) string {
+	switch days := int(d.Hours() / 24); {
+	case days >= 2:
+		return fmt.Sprintf("%d days", days)
+	case days == 1:
+		return "1 day"
+	}
+	if h := int(d.Hours()); h >= 2 {
+		return fmt.Sprintf("%d hours", h)
+	}
+	return "less than 2 hours"
+}
+
+// DistroOrigin reports whether an apt origin ("Ubuntu:24.04/noble-security")
+// is the distribution's own archive: its release, -updates or -security.
+func DistroOrigin(sys protocol.System, origin string) bool {
+	label, rest, ok := strings.Cut(origin, ":")
+	if !ok {
+		return false
+	}
+	_, suite, ok := strings.Cut(rest, "/")
+	if !ok {
+		return false
+	}
+	base := strings.TrimSuffix(strings.TrimSuffix(suite, "-security"), "-updates")
+	switch label {
+	case "Ubuntu":
+		return sys.OSID == "ubuntu" && base == sys.OSCodename
+	case "Debian", "Debian-Security":
+		return sys.OSID == "debian" && (base == sys.OSCodename || base == "stable" || base == "oldstable")
+	}
+	return false
+}
+
+func thirdPartyOrigin(sys protocol.System, origins []string) string {
+	if len(origins) == 0 {
+		return "an unknown package source"
+	}
+	for _, o := range origins {
+		if !DistroOrigin(sys, o) {
+			return o
+		}
+	}
+	return ""
+}
+
+// statefulImages are images that keep data whose format a minor release
+// may change (last part of the repository name).
+var statefulImages = map[string]bool{
+	"postgres": true, "postgresql": true, "pgvector": true, "postgis": true, "timescaledb": true,
+	"mysql": true, "mariadb": true, "percona-server": true, "mongo": true, "mongodb": true, "mongodb-community-server": true,
+	"redis": true, "redis-stack-server": true, "valkey": true, "keydb": true, "dragonfly": true,
+	"clickhouse": true, "clickhouse-server": true, "elasticsearch": true, "opensearch": true,
+	"influxdb": true, "cassandra": true, "neo4j": true, "couchdb": true, "etcd": true, "minio": true,
+}
+
+// dataPaths are container paths where databases keep their data.
+var dataPaths = []string{
+	"/var/lib/postgresql", "/var/lib/mysql", "/var/lib/mariadb", "/data/db", "/var/lib/mongodb",
+	"/var/lib/clickhouse", "/usr/share/elasticsearch/data", "/usr/share/opensearch/data",
+	"/var/lib/influxdb", "/var/lib/influxdb2", "/var/lib/cassandra", "/var/lib/neo4j", "/opt/couchdb/data",
+	"/bitnami", "/var/opt/mssql", "/var/lib/redis", "/var/lib/etcd",
+}
+
+// Stateful reports whether a service looks like it keeps database data,
+// with what gave it away.
+func Stateful(repo string, mountDests []string) (bool, string) {
+	name := repo[strings.LastIndex(repo, "/")+1:]
+	if statefulImages[name] {
+		return true, name
+	}
+	for _, d := range mountDests {
+		for _, p := range dataPaths {
+			if d == p || strings.HasPrefix(d, p+"/") {
+				return true, "data in " + d
+			}
+		}
+	}
+	return false, ""
 }
 
 // LatestReleases is the newest stable release per distro, for the
@@ -57,6 +168,17 @@ var (
 	kernelImageRe = regexp.MustCompile(`^linux-image-(?:unsigned-)?(\d.*)$`)
 	kernelPkgRe   = regexp.MustCompile(`^linux-(image|modules|modules-extra|headers|kbuild|tools|cloud-tools|signatures|generic|virtual|aws|azure|gcp|oracle|kvm|lowlatency|hwe|base)(-|$)`)
 )
+
+// IsKernelPackage reports whether an apt package is part of the kernel item.
+func IsKernelPackage(pkg string) bool { return kernelPkgRe.MatchString(pkg) }
+
+// ImageTo is the To of an image item for an update, as Items writes it.
+func ImageTo(u discover.ImageUpdate) string {
+	if u.NewDigest {
+		return u.ToTag + "@" + shortDigest(u.ToDigest)
+	}
+	return u.ToTag
+}
 
 // engine packages are folded into the Docker Engine item.
 var enginePkgs = map[string]bool{
@@ -101,7 +223,12 @@ func Items(in Input) []protocol.Item {
 		case enginePkgs[u.Package] || composePkgs[u.Package] || dockerAuxPkgs[u.Package]:
 			dockerApt = append(dockerApt, u)
 		default:
-			add(osItem(in.System, u))
+			it := osItem(in.System, u)
+			if src := thirdPartyOrigin(in.System, u.Origins); src != "" {
+				it.Decision = protocol.Flagged
+				it.Reason = fmt.Sprintf("Comes from a package source outside %s (%s), so it waits for a supervised run.", osName(in.System), src)
+			}
+			add(it)
 		}
 	}
 	for _, h := range in.Packages.Held {
@@ -194,11 +321,23 @@ func kernelItem(in Input, pkgs []collect.AptUpgrade, held map[string]bool) (prot
 	case in.Settings.SupervisedReboots:
 		it.Decision = protocol.Flagged
 		it.Reason = "A new kernel needs a reboot, and this server is set to reboot only in a supervised run."
+	case kernelThirdParty(in.System, pkgs) != "":
+		it.Decision = protocol.Flagged
+		it.Reason = fmt.Sprintf("The new kernel comes from a package source outside %s (%s), so it waits for a supervised run.", osName(in.System), kernelThirdParty(in.System, pkgs))
 	default:
 		it.Decision = protocol.Auto
 		it.Reason = "New kernel, installed and then booted once inside the maintenance window. If it doesn't come up, the server falls back to the current kernel."
 	}
 	return it, true
+}
+
+func kernelThirdParty(sys protocol.System, pkgs []collect.AptUpgrade) string {
+	for _, u := range pkgs {
+		if src := thirdPartyOrigin(sys, u.Origins); src != "" {
+			return src
+		}
+	}
+	return ""
 }
 
 func releaseUpgradeItem(sys protocol.System) (protocol.Item, bool) {
@@ -402,13 +541,17 @@ func imageItems(in Input, note func(protocol.Layer, string, string) ReleaseNote)
 		it := protocol.Item{Layer: protocol.LayerImage, Subject: key, From: u.FromTag, To: u.ToTag}
 		if u.NewDigest {
 			it.From = u.FromTag + "@" + shortDigest(u.FromDigest)
-			it.To = u.ToTag + "@" + shortDigest(u.ToDigest)
+			it.To = ImageTo(u)
 		}
 		n := note(protocol.LayerImage, key, u.ToTag)
 		hostData := len(s.HostPathMounts) > 0
+		stateful, why := Stateful(f.Ref.Repo, f.MountDests)
 		switch {
 		case s.Pinned, f.Coolify:
 			continue // Coolify-managed containers are Coolify's job
+		case len(f.ImageComposeLabels) > 0:
+			it.Decision = protocol.Flagged
+			it.Reason = "Its image sets Docker Compose labels itself, so upkeeper.sh can't confirm which compose files this container belongs to. It waits for a supervised run."
 		case f.Policy == "supervised":
 			it.Decision = protocol.Flagged
 			it.Reason = "Labelled upkeeper.policy=supervised, so every update to it waits for a supervised run."
@@ -421,6 +564,12 @@ func imageItems(in Input, note func(protocol.Layer, string, string) ReleaseNote)
 		case u.FamilyChange != "":
 			it.Decision = protocol.Flagged
 			it.Reason = familyReason(u)
+		case stateful && u.Change == versions.Minor:
+			it.Decision = protocol.Flagged
+			it.Reason = fmt.Sprintf("%s → %s is a minor release of a service that keeps data (%s). A minor release can change how data is stored, and putting the old image back can't undo that, so it waits for a supervised run.", u.FromTag, u.ToTag, why)
+		case stateful && u.NewDigest && floatsOverMinors(f.Ref.Repo, u.FromTag):
+			it.Decision = protocol.Flagged
+			it.Reason = fmt.Sprintf("A new image under %s may be a newer minor or major release of a service that keeps data (%s). Putting the old image back can't undo a data migration, so it waits for a supervised run. Pin a version tag to get automatic patch updates.", u.FromTag, why)
 		case u.NewDigest:
 			it.Decision = protocol.Auto
 			it.Reason = fmt.Sprintf("New image published under the same tag (%s). Pulled in the weekly run; if the service doesn't come back healthy, the previous image is put back.", u.FromTag)
@@ -436,9 +585,29 @@ func imageItems(in Input, note func(protocol.Layer, string, string) ReleaseNote)
 			it.Decision = protocol.Auto
 			it.Reason = fmt.Sprintf("%s release (%s → %s). Pulled in the weekly run; if the service doesn't come back healthy, the previous image is put back.", capitalize(u.Change.String()), u.FromTag, u.ToTag)
 		}
+		if it.Decision == protocol.Auto {
+			if young, why := in.Settings.TooNew(u); young {
+				it.Reason = why
+			}
+		}
 		items = append(items, it)
 	}
 	return items
+}
+
+// floatsOverMinors reports whether a tag can move to a newer minor release:
+// "latest" and "7" can; "7.4" moves only over patches. For Postgres the
+// first number is the major, so "16" only moves over bug-fix releases.
+func floatsOverMinors(repo, tag string) bool {
+	t, ok := versions.ParseTag(tag)
+	if !ok {
+		return true
+	}
+	switch repo[strings.LastIndex(repo, "/")+1:] {
+	case "postgres", "postgresql", "pgvector", "postgis", "timescaledb":
+		return false
+	}
+	return len(t.Nums) < 2
 }
 
 // bundledNames names software that tag suffixes often carry.

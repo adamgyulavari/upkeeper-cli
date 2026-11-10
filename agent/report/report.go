@@ -32,6 +32,8 @@ type Collector struct {
 	Offline bool
 	// Cache is saved after each report (registry and apt metadata).
 	Cache *registry.Cache
+	// Policy, if set, fills Report.Policy (protocol 2).
+	Policy func() *protocol.Policy
 }
 
 // Default builds a Collector for the real host.
@@ -46,6 +48,7 @@ func Default(agentVersion, cacheDir string) *Collector {
 		AptMeta:      discover.AptMeta{Cache: cache, Env: env},
 		Cache:        cache,
 		AgentVersion: agentVersion,
+		Settings:     classify.Settings{MinReleaseAge: classify.DefaultMinReleaseAge},
 	}
 }
 
@@ -62,6 +65,14 @@ func DebianArch(goarch string) string {
 
 // Collect builds one report. It never returns an error: problems end up in Errors.
 func (c *Collector) Collect(ctx context.Context) protocol.Report {
+	r, _ := c.Plan(ctx)
+	return r
+}
+
+// Plan builds a report and also returns everything the classifier looked
+// at, which the run engine needs to act on the items (apt's simulation,
+// image references, Docker facts).
+func (c *Collector) Plan(ctx context.Context) (protocol.Report, classify.Input) {
 	now := time.Now
 	if c.Now != nil {
 		now = c.Now
@@ -133,5 +144,8 @@ func (c *Collector) Collect(ctx context.Context) protocol.Report {
 	if len(errs) > 0 {
 		r.Errors = errs
 	}
-	return r
+	if c.Policy != nil {
+		r.Policy = c.Policy()
+	}
+	return r, in
 }

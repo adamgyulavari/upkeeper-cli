@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"time"
 
 	"github.com/adamgyulavari/upkeeper-cli/agent/collect"
 	"github.com/adamgyulavari/upkeeper-cli/agent/registry"
@@ -21,9 +22,18 @@ type ImageUpdate struct {
 	NewDigest        bool
 	FromDigest       string
 	ToDigest         string
+	// FirstSeen is when this agent first saw the target (digest, or tag
+	// if the digest is unknown). Zero if the registry client doesn't track it.
+	FirstSeen time.Time
 	// FamilyChange is set when ToTag moves something bundled in the image
 	// (the version in the tag suffix) by a major version: "pg 16 → 17".
 	FamilyChange string
+}
+
+// SeenTracker is implemented by registry clients that remember when they
+// first saw a digest or tag (registry.Client does).
+type SeenTracker interface {
+	FirstSeen(key string) time.Time
 }
 
 // Registry is the subset of registry.Client discovery needs.
@@ -93,6 +103,25 @@ func Images(ctx context.Context, reg Registry, projects []protocol.Project, fact
 					out = append(out, u)
 				}
 			}
+		}
+	}
+	// Resolve the digest every version update would run, so a run pulls
+	// exactly what was planned, and note when each target was first seen.
+	seen, _ := reg.(SeenTracker)
+	for i := range out {
+		u := &out[i]
+		f := facts.Services[u.Project+"/"+u.Service]
+		if !u.NewDigest && u.ToDigest == "" {
+			if dg, err := reg.Digest(ctx, f.Ref, u.ToTag); err == nil {
+				u.ToDigest = dg
+			}
+		}
+		if seen != nil {
+			key := f.Ref.Name() + ":" + u.ToTag
+			if u.ToDigest != "" {
+				key = f.Ref.Name() + "@" + u.ToDigest
+			}
+			u.FirstSeen = seen.FirstSeen(key)
 		}
 	}
 	skipped := reg.Skipped()

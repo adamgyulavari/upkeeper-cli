@@ -135,6 +135,9 @@ type Image struct {
 	ID          string   `json:"Id"`
 	RepoTags    []string `json:"RepoTags"`
 	RepoDigests []string `json:"RepoDigests"`
+	Config      struct {
+		Labels map[string]string `json:"Labels"`
+	} `json:"Config"`
 }
 
 func (c *Client) Image(ctx context.Context, id string) (Image, error) {
