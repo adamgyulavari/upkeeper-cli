@@ -13,6 +13,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -45,13 +46,53 @@ type Client struct {
 	skipped map[string]error
 }
 
+// Limits on what a registry can make the agent hold.
+const (
+	MaxTags     = 10000
+	MaxTagBytes = 4 << 20
+	maxTagLen   = 128
+)
+
 // New returns a client with the A-06 defaults.
 func New(cache *Cache, userAgent string) *Client {
 	return &Client{
-		HTTP:      &http.Client{Timeout: 20 * time.Second},
+		HTTP:      newHTTP(),
 		Cache:     cache,
 		UserAgent: userAgent,
 	}
+}
+
+// newHTTP follows at most 3 redirects and never from https to http.
+func newHTTP() *http.Client {
+	return &http.Client{Timeout: 20 * time.Second, CheckRedirect: checkRedirect}
+}
+
+func checkRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) >= 3 {
+		return errors.New("too many redirects")
+	}
+	if via[0].URL.Scheme == "https" && req.URL.Scheme != "https" {
+		return errors.New("refusing a redirect from https to " + req.URL.Scheme)
+	}
+	return nil
+}
+
+// tokenHosts lists token servers on another host that a registry may name
+// in its challenge. Otherwise the realm must be on the registry's own host.
+var tokenHosts = map[string][]string{
+	"docker.io":           {"auth.docker.io"},
+	"registry.gitlab.com": {"gitlab.com"},
+}
+
+// tagRe is the OCI tag grammar.
+var tagRe = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$`)
+
+// FirstSeen returns when this agent first saw key (an image digest or
+// tag), recording now if it's new. It is the agent's own clock for the
+// minimum release age, which a publisher can't backdate.
+func (c *Client) FirstSeen(key string) time.Time {
+	c.init()
+	return c.Cache.FirstSeen(key)
 }
 
 // DefaultEndpoint maps docker.io to its API host.
@@ -83,7 +124,7 @@ func (c *Client) init() {
 		c.MaxTagPages = 20
 	}
 	if c.HTTP == nil {
-		c.HTTP = &http.Client{Timeout: 20 * time.Second}
+		c.HTTP = newHTTP()
 	}
 }
 
@@ -154,8 +195,9 @@ func (c *Client) Tags(ctx context.Context, ref Ref) ([]string, error) {
 		return nil, err
 	}
 	var tags []string
+	total := 0
 	next := c.Endpoint(ref.Registry) + "/v2/" + ref.Repo + "/tags/list?n=1000"
-	for page := 0; next != "" && page < c.MaxTagPages; page++ {
+	for page := 0; next != "" && page < c.MaxTagPages && len(tags) < MaxTags && total < MaxTagBytes; page++ {
 		resp, err := c.do(ctx, ref, http.MethodGet, next, "application/json")
 		if err != nil {
 			return nil, err
@@ -163,13 +205,22 @@ func (c *Client) Tags(ctx context.Context, ref Ref) ([]string, error) {
 		var body struct {
 			Tags []string `json:"tags"`
 		}
-		err = json.NewDecoder(io.LimitReader(resp.Body, 16<<20)).Decode(&body)
+		lr := &countingReader{r: io.LimitReader(resp.Body, int64(MaxTagBytes-total))}
+		err = json.NewDecoder(lr).Decode(&body)
+		total += lr.n
 		link := resp.Header.Get("Link")
 		resp.Body.Close()
 		if err != nil {
 			return nil, fmt.Errorf("%s: tag list: %w", ref.Name(), err)
 		}
-		tags = append(tags, body.Tags...)
+		for _, t := range body.Tags {
+			if len(tags) >= MaxTags {
+				break
+			}
+			if tagRe.MatchString(t) {
+				tags = append(tags, t)
+			}
+		}
 		next = nextLink(next, link)
 	}
 	c.Cache.put(key, cacheEntry{Tags: tags})
@@ -282,6 +333,38 @@ func (c *Client) do(ctx context.Context, ref Ref, method, rawURL, accept string)
 	return nil, fmt.Errorf("%s: still unauthorized after getting a token", ref.Name())
 }
 
+type countingReader struct {
+	r io.Reader
+	n int
+}
+
+func (c *countingReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	c.n += n
+	return n, err
+}
+
+// checkRealm accepts a token realm only on the registry's own scheme and
+// host, or on a known token host of that registry.
+func (c *Client) checkRealm(ref Ref, tu *url.URL) error {
+	ep, err := url.Parse(c.Endpoint(ref.Registry))
+	if err != nil {
+		return err
+	}
+	if tu.Scheme != ep.Scheme || (tu.Scheme != "https" && tu.Scheme != "http") {
+		return fmt.Errorf("%s: token server must use %s, not %q", ref.Name(), ep.Scheme, tu.Scheme)
+	}
+	if tu.Host == ep.Host {
+		return nil
+	}
+	for _, h := range tokenHosts[ref.Registry] {
+		if tu.Host == h && tu.Scheme == "https" {
+			return nil
+		}
+	}
+	return fmt.Errorf("%s: refusing a token server on another host (%s)", ref.Name(), tu.Host)
+}
+
 // token fetches an anonymous pull token for the challenge.
 func (c *Client) token(ctx context.Context, ref Ref, challenge string) (string, error) {
 	scheme, params := ParseChallenge(challenge)
@@ -290,6 +373,9 @@ func (c *Client) token(ctx context.Context, ref Ref, challenge string) (string, 
 	}
 	tu, err := url.Parse(params["realm"])
 	if err != nil {
+		return "", err
+	}
+	if err := c.checkRealm(ref, tu); err != nil {
 		return "", err
 	}
 	q := tu.Query()
@@ -385,5 +471,9 @@ func nextLink(cur, link string) string {
 	if err != nil {
 		return ""
 	}
-	return base.ResolveReference(ref).String()
+	next := base.ResolveReference(ref)
+	if next.Scheme != base.Scheme || next.Host != base.Host {
+		return "" // pagination stays on the registry's host
+	}
+	return next.String()
 }

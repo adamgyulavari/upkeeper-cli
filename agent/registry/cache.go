@@ -21,7 +21,15 @@ type cacheFile struct {
 	Entries map[string]cacheEntry `json:"entries"`
 	// Backoff holds registries that rate-limited us, until the given time.
 	Backoff map[string]time.Time `json:"backoff,omitempty"`
+	// Seen holds when this agent first saw an image digest or tag.
+	Seen map[string]time.Time `json:"seen,omitempty"`
 }
+
+// SeenTTL is how long first-seen times are kept.
+const SeenTTL = 60 * 24 * time.Hour
+
+// maxSeen caps the first-seen table.
+const maxSeen = 5000
 
 // Cache is a small JSON file in the agent's cache dir. A Cache with an empty
 // Dir lives in memory only.
@@ -42,13 +50,16 @@ func OpenCache(dir string, now func() time.Time) *Cache {
 		now = time.Now
 	}
 	c := &Cache{Dir: dir, Now: now}
-	c.data = cacheFile{Entries: map[string]cacheEntry{}, Backoff: map[string]time.Time{}}
+	c.data = cacheFile{Entries: map[string]cacheEntry{}, Backoff: map[string]time.Time{}, Seen: map[string]time.Time{}}
 	if dir != "" {
 		if b, err := os.ReadFile(filepath.Join(dir, cacheFileName)); err == nil {
 			var f cacheFile
 			if json.Unmarshal(b, &f) == nil && f.Entries != nil {
 				if f.Backoff == nil {
 					f.Backoff = map[string]time.Time{}
+				}
+				if f.Seen == nil {
+					f.Seen = map[string]time.Time{}
 				}
 				c.data = f
 			}
@@ -73,6 +84,22 @@ func (c *Cache) put(key string, e cacheEntry) {
 	e.Fetched = c.Now()
 	c.data.Entries[key] = e
 	c.dirty = true
+}
+
+// FirstSeen returns when key was first seen, recording now if it's new.
+func (c *Cache) FirstSeen(key string) time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	now := c.Now()
+	if t, ok := c.data.Seen[key]; ok && !t.After(now.Add(time.Minute)) {
+		return t
+	}
+	if len(c.data.Seen) >= maxSeen {
+		return now // full: everything counts as new, which only delays updates
+	}
+	c.data.Seen[key] = now
+	c.dirty = true
+	return now
 }
 
 func (c *Cache) backoffUntil(registry string) (time.Time, bool) {
@@ -105,6 +132,11 @@ func (c *Cache) Save() error {
 	for k, t := range c.data.Backoff {
 		if now.After(t) {
 			delete(c.data.Backoff, k)
+		}
+	}
+	for k, t := range c.data.Seen {
+		if now.Sub(t) > SeenTTL {
+			delete(c.data.Seen, k)
 		}
 	}
 	b, err := json.Marshal(c.data)
