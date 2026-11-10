@@ -22,6 +22,20 @@ type Loop struct {
 	Sleep func(ctx context.Context, d time.Duration) bool
 	// OnInterval is called when the server changes the interval.
 	OnInterval func(seconds int)
+	// OnAck sees every accepted report's answer.
+	OnAck func(protocol.ReportAck)
+}
+
+// Report interval limits: the cloud can't make the agent report more often
+// than every minute, or less often than hourly.
+const (
+	MinInterval = 60
+	MaxInterval = 3600
+)
+
+// ClampInterval keeps a report interval within MinInterval..MaxInterval seconds.
+func ClampInterval(s int) int {
+	return max(MinInterval, min(MaxInterval, s))
 }
 
 func sleepCtx(ctx context.Context, d time.Duration) bool {
@@ -52,6 +66,7 @@ func (l *Loop) Run(ctx context.Context) {
 	if l.Interval <= 0 {
 		l.Interval = 300 * time.Second
 	}
+	l.Interval = time.Duration(ClampInterval(int(l.Interval/time.Second))) * time.Second
 	if l.MinBackoff <= 0 {
 		l.MinBackoff = 30 * time.Second
 	}
@@ -88,8 +103,12 @@ func (l *Loop) Run(ctx context.Context) {
 			wait = backoff
 		} else {
 			backoff = 0
-			if ack.ReportEvery > 0 && time.Duration(ack.ReportEvery)*time.Second != l.Interval {
-				l.Interval = time.Duration(ack.ReportEvery) * time.Second
+			if l.OnAck != nil {
+				l.OnAck(ack)
+			}
+			if every := ClampInterval(ack.ReportEvery); ack.ReportEvery > 0 && time.Duration(every)*time.Second != l.Interval {
+				ack.ReportEvery = every
+				l.Interval = time.Duration(every) * time.Second
 				if l.OnInterval != nil {
 					l.OnInterval(ack.ReportEvery)
 				}

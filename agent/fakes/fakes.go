@@ -215,10 +215,19 @@ type Cloud struct {
 	mu      sync.Mutex
 	Reports []protocol.Report
 	Enrolls []protocol.EnrollRequest
+
+	// Jobs are handed out in order by GET /v1/jobs (each once, unless
+	// Redeliver is set). Events and Results are what agents posted.
+	Jobs      []protocol.SignedJob
+	Redeliver bool
+	Events    map[string][]protocol.RunEvent
+	Results   map[string][]protocol.RunResult
+	FailPosts atomic.Int32 // answer 503 to this many event/result posts
 }
 
 func NewCloud() *Cloud {
-	c := &Cloud{EnrollToken: "enr_test", AgentToken: "agt_secret", ReportEvery: 60}
+	c := &Cloud{EnrollToken: "enr_test", AgentToken: "agt_secret", ReportEvery: 60,
+		Events: map[string][]protocol.RunEvent{}, Results: map[string][]protocol.RunResult{}}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/enroll", func(w http.ResponseWriter, r *http.Request) {
 		var req protocol.EnrollRequest
@@ -259,8 +268,98 @@ func NewCloud() *Cloud {
 		c.mu.Unlock()
 		json.NewEncoder(w).Encode(protocol.ReportAck{OK: true, ReportEvery: c.ReportEvery})
 	})
+	auth := func(w http.ResponseWriter, r *http.Request) bool {
+		if r.Header.Get("Authorization") != "Bearer "+c.AgentToken {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return false
+		}
+		return true
+	}
+	mux.HandleFunc("GET /v1/jobs", func(w http.ResponseWriter, r *http.Request) {
+		if !auth(w, r) {
+			return
+		}
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		if len(c.Jobs) == 0 {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		j := c.Jobs[0]
+		if !c.Redeliver {
+			c.Jobs = c.Jobs[1:]
+		}
+		json.NewEncoder(w).Encode(j)
+	})
+	mux.HandleFunc("POST /v1/runs/{id}/events", func(w http.ResponseWriter, r *http.Request) {
+		if !auth(w, r) {
+			return
+		}
+		if c.FailPosts.Load() > 0 {
+			c.FailPosts.Add(-1)
+			http.Error(w, "try later", http.StatusServiceUnavailable)
+			return
+		}
+		var evs []protocol.RunEvent
+		if err := json.NewDecoder(r.Body).Decode(&evs); err != nil {
+			http.Error(w, "bad json", 400)
+			return
+		}
+		c.mu.Lock()
+		have := map[int]bool{}
+		for _, e := range c.Events[r.PathValue("id")] {
+			have[e.Seq] = true
+		}
+		for _, e := range evs {
+			if !have[e.Seq] {
+				c.Events[r.PathValue("id")] = append(c.Events[r.PathValue("id")], e)
+			}
+		}
+		c.mu.Unlock()
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("POST /v1/runs/{id}/result", func(w http.ResponseWriter, r *http.Request) {
+		if !auth(w, r) {
+			return
+		}
+		if c.FailPosts.Load() > 0 {
+			c.FailPosts.Add(-1)
+			http.Error(w, "try later", http.StatusServiceUnavailable)
+			return
+		}
+		var res protocol.RunResult
+		if err := json.NewDecoder(r.Body).Decode(&res); err != nil || res.JobID != r.PathValue("id") {
+			http.Error(w, "bad result", 400)
+			return
+		}
+		c.mu.Lock()
+		c.Results[res.JobID] = append(c.Results[res.JobID], res)
+		c.mu.Unlock()
+		w.WriteHeader(http.StatusNoContent)
+	})
 	c.Srv = httptest.NewServer(mux)
 	return c
+}
+
+// AddJob queues a signed job.
+func (c *Cloud) AddJob(sj protocol.SignedJob) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.Jobs = append(c.Jobs, sj)
+}
+
+// RunEvents returns the events posted for a job.
+func (c *Cloud) RunEvents(id string) []protocol.RunEvent {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]protocol.RunEvent(nil), c.Events[id]...)
+}
+
+// RunResults returns the results posted for a job.
+func (c *Cloud) RunResults(id string) []protocol.RunResult {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]protocol.RunResult(nil), c.Results[id]...)
 }
 
 func (c *Cloud) ReportCount() int {

@@ -50,6 +50,7 @@ func Load(path string) (Config, error) {
 	if c.ReportEvery <= 0 {
 		c.ReportEvery = DefaultEvery
 	}
+	c.ReportEvery = max(60, min(3600, c.ReportEvery))
 	return c, nil
 }
 

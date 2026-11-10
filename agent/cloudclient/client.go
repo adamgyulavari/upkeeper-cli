@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -69,6 +70,68 @@ func (c *Client) http() *http.Client {
 		return c.HTTP
 	}
 	return &http.Client{Timeout: 30 * time.Second}
+}
+
+// JobIDOK is the shape of job IDs the agent puts in a URL.
+var jobIDRe = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
+
+// JobIDOK reports whether id is safe to use in a URL path.
+func JobIDOK(id string) bool { return jobIDRe.MatchString(id) }
+
+// NextJob long-polls for a job. It returns nil, nil when there is none.
+func (c *Client) NextJob(ctx context.Context, wait time.Duration) (*protocol.SignedJob, error) {
+	base, err := CheckURL(c.Base)
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, wait+20*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("%s/v1/jobs?wait=%d", base, int(wait.Seconds())), nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "application/json")
+	if c.UserAgent != "" {
+		req.Header.Set("User-Agent", c.UserAgent)
+	}
+	req.Header.Set("Authorization", "Bearer "+c.Token)
+	h := c.http()
+	if c.HTTP == nil {
+		h = &http.Client{} // the context bounds the long poll
+	}
+	resp, err := h.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	switch {
+	case resp.StatusCode == http.StatusNoContent:
+		return nil, nil
+	case resp.StatusCode != http.StatusOK:
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return nil, &StatusError{Code: resp.StatusCode, Body: strings.TrimSpace(string(b))}
+	}
+	var sj protocol.SignedJob
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 256<<10)).Decode(&sj); err != nil {
+		return nil, fmt.Errorf("jobs: bad response: %w", err)
+	}
+	return &sj, nil
+}
+
+// PostEvents appends run events (the cloud ignores seqs it already has).
+func (c *Client) PostEvents(ctx context.Context, jobID string, evs []protocol.RunEvent) error {
+	if !JobIDOK(jobID) {
+		return fmt.Errorf("bad job id %q", jobID)
+	}
+	return c.post(ctx, "/v1/runs/"+jobID+"/events", evs, nil)
+}
+
+// PostResult sends a run's final result.
+func (c *Client) PostResult(ctx context.Context, res protocol.RunResult) error {
+	if !JobIDOK(res.JobID) {
+		return fmt.Errorf("bad job id %q", res.JobID)
+	}
+	return c.post(ctx, "/v1/runs/"+res.JobID+"/result", res, nil)
 }
 
 func (c *Client) post(ctx context.Context, path string, in, out any) error {
