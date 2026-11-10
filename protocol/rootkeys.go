@@ -60,3 +60,7 @@ func Roots() ([]RootKey, error) {
 
 // TestRootTrusted reports whether this build trusts the TEST root.
 func TestRootTrusted() bool { return allowTestRoot == "yes" }
+
+// DevBuild reports a development build (`make build-dev`). Only these
+// honour test conveniences such as UPKEEPER_DEV_MIN_RELEASE_AGE.
+func DevBuild() bool { return allowTestRoot == "yes" }

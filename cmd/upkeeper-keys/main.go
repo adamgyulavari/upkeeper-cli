@@ -10,6 +10,8 @@
 //	upkeeper-keys sign-cert -root root.key -root-id ROOT_ID -key-id KEY_ID -pub BASE64 [-days 30]
 //	    Signs a certificate for an online key with the root key and prints
 //	    it as JSON (the control plane's JOB_KEY_CERT).
+//	    -test-root instead of -root/-root-id signs with the public TEST root
+//	    (development builds only; never for production).
 //	upkeeper-keys show-cert < cert.json
 //	    Prints a certificate's key ID, fingerprint and validity.
 //
@@ -20,6 +22,7 @@ package main
 import (
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -32,6 +35,9 @@ import (
 
 	"github.com/adamgyulavari/upkeeper-cli/protocol"
 )
+
+// testRootSeedPhrase derives the TEST root (protocol.TestRootPublicKey).
+const testRootSeedPhrase = "upkeeper.sh TEST root key. Public on purpose. Never trust it in production."
 
 func main() {
 	if err := run(os.Args[1:], os.Stdin, os.Stdout); err != nil {
@@ -76,9 +82,11 @@ func run(args []string, stdin io.Reader, stdout io.Writer) error {
 	keyID := fs.String("key-id", "", "online key ID")
 	pub := fs.String("pub", "", "online public key (base64)")
 	days := fs.Int("days", 30, "certificate validity in days")
+	testRoot := fs.Bool("test-root", false, "sign with the public TEST root (development only)")
 	if err := fs.Parse(args[1:]); err != nil {
 		return err
 	}
+	var err error
 	switch args[0] {
 	case "gen-root", "gen-online":
 		if *id == "" || *out == "" {
@@ -99,14 +107,22 @@ func run(args []string, stdin io.Reader, stdout io.Writer) error {
 		}
 		return nil
 	case "sign-cert":
-		if *rootPath == "" || *rootID == "" || *keyID == "" || *pub == "" {
-			return errors.New("-root, -root-id, -key-id and -pub are required")
+		if *testRoot {
+			*rootID = protocol.TestRootID
+		} else if *rootPath == "" || *rootID == "" {
+			return errors.New("-root and -root-id (or -test-root) are required")
+		}
+		if *keyID == "" || *pub == "" {
+			return errors.New("-key-id and -pub are required")
 		}
 		if *days < 1 || *days > 90 {
 			return errors.New("-days must be between 1 and 90")
 		}
-		root, err := readSeed(*rootPath)
-		if err != nil {
+		var root ed25519.PrivateKey
+		if *testRoot {
+			seed := sha256.Sum256([]byte(testRootSeedPhrase))
+			root = ed25519.NewKeyFromSeed(seed[:])
+		} else if root, err = readSeed(*rootPath); err != nil {
 			return err
 		}
 		pk, err := base64.StdEncoding.DecodeString(*pub)

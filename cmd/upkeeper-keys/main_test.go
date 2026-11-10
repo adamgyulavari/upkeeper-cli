@@ -48,3 +48,17 @@ func TestRootSignsOnlineKey(t *testing.T) {
 		t.Error("overwrote the root key")
 	}
 }
+
+func TestTestRootCert(t *testing.T) {
+	var out bytes.Buffer
+	pub := "JCTV7oOGqEFqXtiUj7RYVxUnuGayAP+sMUb6lYQJH9M="
+	if err := run([]string{"sign-cert", "-test-root", "-key-id", "dev", "-pub", pub}, nil, &out); err != nil {
+		t.Fatal(err)
+	}
+	var c protocol.KeyCert
+	json.Unmarshal(out.Bytes(), &c)
+	roots, _ := protocol.ParseRootKeys(protocol.TestRootID + ":" + protocol.TestRootPublicKey)
+	if err := c.Verify(roots, time.Now()); err != nil {
+		t.Fatalf("TEST root cert: %v", err)
+	}
+}

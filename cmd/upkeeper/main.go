@@ -382,8 +382,23 @@ func policyReport(g globals) *protocol.Policy {
 	return p
 }
 
+// minReleaseAge is 3 days. Development builds may lower it with
+// UPKEEPER_DEV_MIN_RELEASE_AGE (a Go duration) for test VMs.
+func minReleaseAge(logger *log.Logger) time.Duration {
+	if v := os.Getenv("UPKEEPER_DEV_MIN_RELEASE_AGE"); v != "" && protocol.DevBuild() {
+		if d, err := time.ParseDuration(v); err == nil && d >= 0 {
+			if logger != nil {
+				logger.Printf("development build: minimum image release age is %s instead of %s.", d, classify.DefaultMinReleaseAge)
+			}
+			return d
+		}
+	}
+	return classify.DefaultMinReleaseAge
+}
+
 func collector(g globals) *report.Collector {
 	c := report.Default(version, g.cacheDir)
+	c.Settings.MinReleaseAge = minReleaseAge(nil)
 	c.Policy = func() *protocol.Policy { return policyReport(g) }
 	return c
 }
@@ -423,7 +438,7 @@ func daemon(ctx context.Context, g globals, cfg config.Config, logger *log.Logge
 		FS:        host.RootFS{Root: "/"},
 		Policy:    g.store(),
 		StatePath: g.stateDir + "/run.json",
-		Settings:  classify.Settings{MinReleaseAge: classify.DefaultMinReleaseAge},
+		Settings:  classify.Settings{MinReleaseAge: minReleaseAge(logger)},
 		Logf:      logger.Printf,
 	}
 	jl := &jobs.Loop{
