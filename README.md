@@ -2,15 +2,19 @@
 
 The open-source server agent for [upkeeper.sh](https://upkeeper.sh): it keeps an Ubuntu/Debian Docker host up to date, covering OS packages, the kernel, Docker Engine and container images.
 
-> **Status: M0, read-only.** This version only reads the server and reports what's out of date. It contains no action that changes anything, and a test (`agent/host`) fails the build if one appears.
+> **About this project.** I built upkeeper for my own servers, and most of the code was written with AI coding agents, with reviews and tests along the way. I'm opening it up because it may be useful to others. It runs as root, so read the code before you install it, and don't take my word for anything you can check.
+>
+> **Status: early, not announced anywhere.** The hosted service isn't open for sign-ups yet.
+>
+> **This version (v0.1.0) is read-only.** This version only reads the server and reports what's out of date. It contains no action that changes anything, and a test (`agent/host`) fails the build if one appears.
 
 ## Install
 
 ```sh
-curl -fsSL upkeeper.sh | sh -s -- <enroll-token>
+curl --proto '=https' --tlsv1.2 -fsSL https://<your control plane>/install.sh | sh -s -- <enroll-token> --url https://<your control plane>
 ```
 
-Get the enroll token from your upkeeper.sh dashboard (**Add server**). The installer:
+The dashboard's **Add server** page shows the exact line with a one-time token. Always fetch the script over `https://`; it runs as root. The installer:
 
 - detects your OS and architecture;
 - downloads the binary from this repo's [releases](https://github.com/adamgyulavari/upkeeper-cli/releases) and verifies its sha256;
