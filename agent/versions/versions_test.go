@@ -62,6 +62,13 @@ func TestParseTagAndDiff(t *testing.T) {
 		{"v1.2.3", "1.2.4", Patch, false},
 		{"16", "17", Major, true},
 		{"16", "16.1", Minor, false},
+		{"0.7.2-pg16", "0.7.4-pg16", Patch, true},
+		{"0.7.2-pg16", "0.7.4-pg17", Patch, false}, // other family: a different line
+		{"16-alpine", "17-alpine", Major, true},
+		{"20-alpine3.19", "20-alpine3.20", Patch, true},
+		{"1.0.0-alpine3.9", "1.0.0-alpine3.10", Patch, true},
+		{"4.0.10-ls260", "4.0.11-ls262", Patch, true},
+		{"1.2.3-1", "1.2.4-2", Patch, true},
 	}
 	for _, tt := range tests {
 		a, ok1 := ParseTag(tt.a)
@@ -80,6 +87,16 @@ func TestParseTagAndDiff(t *testing.T) {
 		if _, ok := ParseTag(s); ok {
 			t.Errorf("ParseTag(%q) should fail", s)
 		}
+	}
+	a, _ := ParseTag("0.7.2-pg16")
+	b, _ := ParseTag("0.7.4-pg17")
+	if a.Family != "-pg16" || FamilyChange(a, b) != "pg 16 → 17" || !FamilyNewer(a, b) || FamilyNewer(b, a) || !a.SameKind(b) {
+		t.Errorf("pg family: %+v %q", a, FamilyChange(a, b))
+	}
+	x, _ := ParseTag("1.0.0-alpine3.9")
+	y, _ := ParseTag("1.0.0-alpine3.10")
+	if Compare(x, y) >= 0 || x.Family != "-alpine3" {
+		t.Errorf("alpine3.9 vs 3.10: %d %q", Compare(x, y), x.Family)
 	}
 	rc, _ := ParseTag("2.0.0-rc1")
 	if !rc.Prerelease() {

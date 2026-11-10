@@ -192,6 +192,14 @@ func TestNewerTags(t *testing.T) {
 	if minor, major := discover.NewerTags(cur, []string{"16.6-alpine3.21", "17.2-alpine3.21", "16.6-bookworm", "16.6"}); minor != "16.6-alpine3.21" || major != "17.2-alpine3.21" {
 		t.Errorf("variants: %q %q", minor, major)
 	}
+	pg, _ := versions.ParseTag("0.7.2-pg16")
+	tags = []string{"0.7.4-pg16", "0.7.4-pg17", "0.8.0-pg15", "0.7.9-pg18-rc1"}
+	if minor, major := discover.NewerTags(pg, tags); minor != "0.7.4-pg16" || major != "" {
+		t.Errorf("pg16 line: %q %q", minor, major)
+	}
+	if f := discover.NewerFamily(pg, tags); f != "0.7.4-pg17" {
+		t.Errorf("newer family: %q", f)
+	}
 }
 
 type fakeReg struct {

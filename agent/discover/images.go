@@ -21,6 +21,9 @@ type ImageUpdate struct {
 	NewDigest        bool
 	FromDigest       string
 	ToDigest         string
+	// FamilyChange is set when ToTag moves something bundled in the image
+	// (the version in the tag suffix) by a major version: "pg 16 → 17".
+	FamilyChange string
 }
 
 // Registry is the subset of registry.Client discovery needs.
@@ -72,6 +75,12 @@ func Images(ctx context.Context, reg Registry, projects []protocol.Project, fact
 						u.ToTag, u.Change = t, versions.Diff(cur, nt)
 						out = append(out, u)
 					}
+					if t := NewerFamily(cur, tags); t != "" {
+						nt, _ := versions.ParseTag(t)
+						u := base
+						u.ToTag, u.Change, u.FamilyChange = t, versions.Major, versions.FamilyChange(cur, nt)
+						out = append(out, u)
+					}
 				}
 			}
 			if !semver || !cur.Precise() {
@@ -96,6 +105,32 @@ func Images(ctx context.Context, reg Registry, projects []protocol.Project, fact
 		errs.Add("registry "+n, fmt.Errorf("skipped image checks: %v", skipped[n]))
 	}
 	return out
+}
+
+// NewerFamily returns the newest tag of the same kind whose suffix moves an
+// embedded version up by a major (0.7.2-pg16 → 0.7.4-pg17), or "". These
+// are never offered as an ordinary update of the current line.
+func NewerFamily(cur versions.Tag, tags []string) string {
+	var best versions.Tag
+	for _, s := range tags {
+		t, ok := versions.ParseTag(s)
+		if !ok || t.Prerelease() || !cur.SameKind(t) || t.Family == cur.Family || !versions.FamilyNewer(cur, t) {
+			continue
+		}
+		if best.Raw == "" || familyLess(best, t) {
+			best = t
+		}
+	}
+	return best.Raw
+}
+
+func familyLess(a, b versions.Tag) bool {
+	for i := range a.Embedded {
+		if i < len(b.Embedded) && a.Embedded[i].Major != b.Embedded[i].Major {
+			return a.Embedded[i].Major < b.Embedded[i].Major
+		}
+	}
+	return versions.Compare(a, b) < 0
 }
 
 // NewerTags returns the newest compatible tag within the same major

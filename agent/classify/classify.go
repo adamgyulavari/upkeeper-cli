@@ -418,6 +418,9 @@ func imageItems(in Input, note func(protocol.Layer, string, string) ReleaseNote)
 		case n.Breaking || n.ManualSteps || n.Migration:
 			it.Decision = protocol.Flagged
 			it.Reason = noteReason(n, it.To)
+		case u.FamilyChange != "":
+			it.Decision = protocol.Flagged
+			it.Reason = familyReason(u)
 		case u.NewDigest:
 			it.Decision = protocol.Auto
 			it.Reason = fmt.Sprintf("New image published under the same tag (%s). Pulled in the weekly run; if the service doesn't come back healthy, the previous image is put back.", u.FromTag)
@@ -436,6 +439,38 @@ func imageItems(in Input, note func(protocol.Layer, string, string) ReleaseNote)
 		items = append(items, it)
 	}
 	return items
+}
+
+// bundledNames names software that tag suffixes often carry.
+var bundledNames = map[string]string{
+	"pg": "Postgres", "postgres": "Postgres", "postgresql": "Postgres", "mysql": "MySQL", "mariadb": "MariaDB",
+	"mongo": "MongoDB", "redis": "Redis", "php": "PHP", "python": "Python", "py": "Python", "node": "Node.js",
+	"jdk": "Java", "jre": "Java", "java": "Java", "openjdk": "Java", "temurin": "Java", "ruby": "Ruby",
+	"go": "Go", "golang": "Go", "debian": "Debian", "ubuntu": "Ubuntu", "alpine": "Alpine",
+}
+
+var databases = map[string]bool{"Postgres": true, "MySQL": true, "MariaDB": true, "MongoDB": true}
+
+func familyReason(u discover.ImageUpdate) string {
+	ft, _ := versions.ParseTag(u.FromTag)
+	tt, _ := versions.ParseTag(u.ToTag)
+	if len(ft.Embedded) == len(tt.Embedded) {
+		for i := range ft.Embedded {
+			a, b := ft.Embedded[i], tt.Embedded[i]
+			if a.Major == b.Major {
+				continue
+			}
+			name, ok := bundledNames[a.Word]
+			if !ok {
+				name = a.Word
+			}
+			if databases[name] {
+				return fmt.Sprintf("%s → %s also moves %s %d → %d, which needs a data migration, so it waits for a supervised run.", u.FromTag, u.ToTag, name, a.Major, b.Major)
+			}
+			return fmt.Sprintf("%s → %s also moves %s %d → %d inside the image, a major upgrade, so it waits for a supervised run.", u.FromTag, u.ToTag, name, a.Major, b.Major)
+		}
+	}
+	return fmt.Sprintf("%s → %s changes the tag's suffix (%s), so it waits for a supervised run.", u.FromTag, u.ToTag, u.FamilyChange)
 }
 
 func shortDigest(d string) string {
