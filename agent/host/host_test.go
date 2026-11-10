@@ -37,6 +37,13 @@ func TestAllowed(t *testing.T) {
 		{"apt-get", AptInstallArgs([]PkgVersion{{"-oDpkg::Pre-Invoke=x", "1"}}), false},
 		{"apt-get", AptInstallArgs([]PkgVersion{{"openssl", "1;reboot"}}), false},
 		{"apt-get", append(AptInstallArgs([]PkgVersion{{"openssl", "1"}}), "--allow-downgrades"), false},
+		{"apt-get", AptInstallArgs([]PkgVersion{{"openssh-server", "1:9.6p1-3ubuntu13.99-"}}), false},
+		{"apt-get", AptInstallArgs([]PkgVersion{{"foo-", "1"}}), false},
+		{"apt-get", AptInstallArgs([]PkgVersion{{"foo+", "1"}}), false},
+		{"apt-get", AptInstallArgs([]PkgVersion{{"foo", "1.0+"}}), false},
+		{"apt-get", AptInstallArgs([]PkgVersion{{"libstdc++6", "14.2.0-4ubuntu2~24.04"}}), true},
+		{"apt-get", AptInstallArgs([]PkgVersion{{"vim", "2:9.1.0016-1ubuntu7.4"}, {"a", "1"}}), true},
+		{"apt-get", []string{"-y", "-o", "Dpkg::Options::=--force-confdef", "-o", "Dpkg::Options::=--force-confold", "install", "--only-upgrade", "openssl"}, false},
 		{"apt-get", []string{"-y", "install", "--only-upgrade", "openssl=1"}, false},
 		{"apt-get", []string{"-y", "-o", "Dpkg::Options::=--force-confdef", "-o", "Dpkg::Options::=--force-confold", "install", "openssl=1"}, false},
 		{"apt-mark", []string{"showhold"}, true},
@@ -52,7 +59,8 @@ func TestAllowed(t *testing.T) {
 		{"systemctl", []string{"restart", "docker"}, false},
 		{"docker", []string{"pull", "nginx"}, false},
 		{"docker", ComposeUp{ProjectDir: "/opt/app", Project: "app", Files: []string{"/opt/app/compose.yml", "/opt/app/compose.override.upkeeper.yml"}, Services: []string{"web"}}.Args(), true},
-		{"docker", ComposeUp{ProjectDir: "/opt/my app", Project: "app", Files: []string{"/opt/my app/compose.yml"}, EnvFiles: []string{"/opt/my app/.env.prod"}, Services: []string{"web", "worker_1"}}.Args(), true},
+		{"docker", ComposeUp{ProjectDir: "/opt/my app", Project: "app", Files: []string{"/opt/my app/compose.yml"}, Services: []string{"web", "worker_1"}}.Args(), true},
+		{"docker", []string{"compose", "--project-directory", "/opt/app", "-p", "app", "-f", "/opt/app/compose.yml", "--env-file", "/etc/shadow", "up", "-d", "--no-deps", "--no-build", "--force-recreate", "--pull", "never", "web"}, false},
 		{"docker", ComposeUp{ProjectDir: "opt/app", Project: "app", Files: []string{"/opt/app/compose.yml"}, Services: []string{"web"}}.Args(), false},
 		{"docker", ComposeUp{ProjectDir: "/opt/app/../../etc", Project: "app", Files: []string{"/opt/app/compose.yml"}, Services: []string{"web"}}.Args(), false},
 		{"docker", ComposeUp{ProjectDir: "/opt/app", Project: "App", Files: []string{"/opt/app/compose.yml"}, Services: []string{"web"}}.Args(), false},
@@ -81,7 +89,7 @@ func TestAllowed(t *testing.T) {
 }
 
 func TestParseComposeUpRoundTrip(t *testing.T) {
-	c := ComposeUp{ProjectDir: "/srv/a", Project: "a", Files: []string{"/srv/a/docker-compose.yml"}, EnvFiles: []string{"/srv/a/.env"}, Services: []string{"redis"}}
+	c := ComposeUp{ProjectDir: "/srv/a", Project: "a", Files: []string{"/srv/a/docker-compose.yml"}, Services: []string{"redis"}}
 	got, ok := ParseComposeUp(c.Args())
 	if !ok || !slices.Equal(got.Args(), c.Args()) {
 		t.Fatalf("round trip: %+v %v", got, ok)

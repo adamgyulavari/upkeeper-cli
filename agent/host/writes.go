@@ -39,7 +39,9 @@ var (
 	// aptSimInstallPrefix simulates that install without writing apt's caches.
 	aptSimInstallPrefix = append(slices.Clone(AptNoCache), "-s", "install", "--only-upgrade")
 
-	pinnedPkgRe = regexp.MustCompile(`^[a-z0-9][a-z0-9.+-]*=[0-9][A-Za-z0-9.+~:-]*$`)
+	// pkg=version. Neither part may end in "-" or "+", which apt reads as
+	// "remove" or "install" suffixes.
+	pinnedPkgRe = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9.+-]*[a-z0-9])?=[0-9](?:[A-Za-z0-9.+~:-]*[A-Za-z0-9~])?$`)
 )
 
 // PkgVersion is one package at an exact version.
@@ -97,8 +99,11 @@ func aptWriteAllowed(args []string) bool {
 
 // ComposeUp recreates named services of one Compose project:
 //
-//	docker compose --project-directory DIR -p NAME -f FILE… [--env-file FILE…]
+//	docker compose --project-directory DIR -p NAME -f FILE…
 //	  up -d --no-deps --no-build --force-recreate --pull never SERVICE…
+//
+// There is no --env-file: Compose reads only DIR/.env, which agent/run
+// checks like the compose files.
 //
 // --pull never makes Compose use exactly the image the agent pulled or put
 // back, whatever pull_policy the project sets.
@@ -106,7 +111,6 @@ type ComposeUp struct {
 	ProjectDir string
 	Project    string
 	Files      []string
-	EnvFiles   []string
 	Services   []string
 }
 
@@ -123,9 +127,6 @@ func (c ComposeUp) Args() []string {
 	for _, f := range c.Files {
 		a = append(a, "-f", f)
 	}
-	for _, f := range c.EnvFiles {
-		a = append(a, "--env-file", f)
-	}
 	a = append(a, composeUpTail...)
 	return append(a, c.Services...)
 }
@@ -135,7 +136,7 @@ func (c ComposeUp) Valid() bool {
 	if !absPath(c.ProjectDir) || !composeProjectRe.MatchString(c.Project) || len(c.Files) == 0 || len(c.Services) == 0 {
 		return false
 	}
-	for _, f := range append(slices.Clone(c.Files), c.EnvFiles...) {
+	for _, f := range c.Files {
 		if !absPath(f) {
 			return false
 		}
@@ -175,10 +176,6 @@ func ParseComposeUp(args []string) (ComposeUp, bool) {
 		c.Files = append(c.Files, args[i+1])
 		i += 2
 	}
-	for i+1 < len(args) && args[i] == "--env-file" {
-		c.EnvFiles = append(c.EnvFiles, args[i+1])
-		i += 2
-	}
 	if len(args) < i+len(composeUpTail) || !slices.Equal(args[i:i+len(composeUpTail)], composeUpTail) {
 		return c, false
 	}
@@ -187,4 +184,11 @@ func ParseComposeUp(args []string) (ComposeUp, bool) {
 		return c, false
 	}
 	return c, true
+}
+
+// ValidPinned reports whether p can be passed to apt-get install. Packages
+// whose name or version ends in "-" or "+" (g++, for one) can't, because
+// apt would read the suffix as an instruction; the run skips them.
+func ValidPinned(p PkgVersion) bool {
+	return pinnedPkgRe.MatchString(p.arg()) && !IsDockerFamily(p.Name)
 }
