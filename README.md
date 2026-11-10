@@ -78,11 +78,11 @@ What stays out of automatic runs (and waits for a supervised run): major version
 
 **Files from containers aren't trusted.** Docker labels can come from an image, so compose paths from labels are used only after checking ownership, permissions, symlinks and container mounts, and the files must not change between the check and `compose up`.
 
-**The systemd unit.** In M0 the unit had a strict read-only sandbox. M1 has to upgrade packages, and apt and dpkg write `/usr`, `/etc`, `/boot`, `/var/lib/dpkg` and more, set setuid bits, run maintainer scripts that use devices, sysctl and kernel modules, and expect a normal umask. So these M0 settings were **dropped**: `ProtectSystem=strict`, `ReadWritePaths`, `CapabilityBoundingSet`, `NoNewPrivileges`, `PrivateDevices`, `ProtectKernelTunables`, `ProtectKernelModules`, `RestrictSUIDSGID`, `RestrictNamespaces`, `MemoryDenyWriteExecute` and `UMask=0077`.
+**The systemd unit.** In M0 the unit had a strict read-only sandbox. M1 upgrades packages, and apt, dpkg and their maintainer scripts run as children of the agent's service. Those scripts write `/usr`, `/etc`, `/boot` and `/var`, set setuid bits, open block devices (`update-grub`, `grub-probe`, `blkid` in initramfs hooks), load kernel modules, build DKMS modules and compress initramfs images, which can take more than a gigabyte of memory. Any sandbox setting is inherited by them: `ProtectClock` or `PrivateDevices` closes the device list, `MemoryMax` lets the kernel kill a postinst halfway, `ProtectHome` blocks the override file under `/root` or `/home`, and a syscall filter kills foreign-architecture scripts.
 
-What's **kept**: `/etc/upkeeper` read-only for the service (the policy and config change only through `sudo upkeeper …`), `ProtectHome=read-only`, `PrivateTmp`, `ProtectKernelLogs`, `ProtectControlGroups`, `ProtectClock`, `ProtectHostname`, `RestrictRealtime`, `LockPersonality`, native syscalls only, `MemoryMax=1G`, `TasksMax=512`, and `KillMode=process` so a stopped service never kills apt halfway.
+Two ways were considered: start apt in a separate transient unit (`systemd-run`), or run it in the agent's unit without a sandbox. M1 does the second. It is one fixed file that a test checks, it behaves the same on every supported release, and it doesn't add another command to the allowlist. So the M1 unit keeps only `/etc/upkeeper` read-only for the service (the policy and config change only through `sudo upkeeper …`), a normal umask, and `KillMode=process`, so a stopped service lets apt finish instead of killing it halfway. Everything else from M0 (`ProtectSystem`, `ProtectHome`, `PrivateTmp`, `PrivateDevices`, `ProtectClock`, `ProtectKernel*`, `ProtectControlGroups`, `MemoryMax`, `TasksMax`, syscall and address-family filters, `NoNewPrivileges`, `CapabilityBoundingSet`) is gone, and a test (`deploy/deploy_test.go`) fails if one comes back.
 
-Be clear about what the sandbox means: the agent can use the Docker socket, which is root-equivalent, so the sandbox never contained a compromised agent, in M0 either. The real limits are the allowlist, the signed-job checks and the local policy.
+Be clear about what the sandbox meant: the agent can use the Docker socket, which is root-equivalent, so the sandbox never contained a compromised agent, in M0 either. The real limits are the allowlist, the signed-job checks and the local policy.
 
 On a server that stays in **observe** mode you can bring back the strict M0 sandbox with a drop-in:
 
@@ -91,6 +91,8 @@ On a server that stays in **observe** mode you can bring back the strict M0 sand
 [Service]
 ProtectSystem=strict
 ReadWritePaths=-/var/cache/upkeeper -/var/lib/upkeeper
+ProtectHome=read-only
+PrivateTmp=yes
 CapabilityBoundingSet=CAP_DAC_READ_SEARCH
 NoNewPrivileges=yes
 PrivateDevices=yes

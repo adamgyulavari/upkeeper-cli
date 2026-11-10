@@ -61,10 +61,12 @@ KillMode=process
 TimeoutStopSec=90s
 
 # Runs as root: the Docker socket and apt are root-only. From M1 the agent
-# can upgrade packages (apt/dpkg write /usr, /etc, /boot, /var) and recreate
-# containers, so the M0 read-only sandbox can't stay. What's kept is below;
-# README.md (Security) lists what was dropped and why, and how to restore
-# the strict sandbox on servers that stay in observe mode.
+# upgrades packages, and apt, dpkg and their maintainer scripts (kernel and
+# grub hooks, initramfs, DKMS) run as children of this service. They must
+# see the system exactly as they would from a root shell, so this unit has
+# no sandbox: no device policy, no memory cap, no private /tmp, no
+# read-only /home. README.md (Security) explains why and how to restore the
+# strict sandbox on servers that stay in observe mode.
 ConfigurationDirectory=upkeeper
 ConfigurationDirectoryMode=0700
 CacheDirectory=upkeeper
@@ -74,19 +76,6 @@ StateDirectoryMode=0700
 # The agent never writes its config or the local policy at runtime; only
 # root on the server does, with `upkeeper policy set`.
 ReadOnlyPaths=/etc/upkeeper
-ProtectHome=read-only
-PrivateTmp=yes
-ProtectKernelLogs=yes
-ProtectControlGroups=yes
-ProtectClock=yes
-ProtectHostname=yes
-RestrictRealtime=yes
-RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
-LockPersonality=yes
-SystemCallArchitectures=native
-# apt, dpkg and docker compose run inside this cgroup too.
-MemoryMax=1G
-TasksMax=512
 UMask=0022
 
 [Install]

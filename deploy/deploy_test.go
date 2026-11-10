@@ -146,16 +146,36 @@ func TestInstallerChecksSignature(t *testing.T) {
 func TestUnit(t *testing.T) {
 	b, _ := os.ReadFile("upkeeper.service")
 	unit := string(b)
-	for _, want := range []string{"ReadOnlyPaths=/etc/upkeeper", "KillMode=process", "MemoryMax=", "StateDirectory=upkeeper", "UMask=0022", "ProtectHome=read-only"} {
+	for _, want := range []string{"ReadOnlyPaths=/etc/upkeeper", "KillMode=process", "StateDirectory=upkeeper", "UMask=0022"} {
 		if !strings.Contains(unit, want) {
 			t.Errorf("unit lacks %s", want)
 		}
 	}
-	// Dropped on purpose for apt (see README, Security): make sure they don't
-	// come back without someone checking that apt still works.
-	for _, gone := range []string{"ProtectSystem=strict", "RestrictSUIDSGID=yes", "UMask=0077", "PrivateDevices=yes"} {
-		if strings.Contains(unit, gone) {
-			t.Errorf("unit has %s, which breaks package upgrades", gone)
+	// apt, dpkg and maintainer scripts (update-grub, update-initramfs, DKMS)
+	// run as children of the service, so nothing may restrict them: no
+	// device policy (ProtectClock and ProtectKernelLogs imply one), no
+	// memory or task cap, no private /tmp, no read-only /home (the override
+	// file can live there), no syscall or address-family filter (foreign-
+	// architecture maintainer scripts). See README, Security.
+	forbidden := []string{
+		"DeviceAllow", "DevicePolicy", "PrivateDevices", "ProtectClock", "ProtectKernelLogs",
+		"ProtectKernelModules", "ProtectKernelTunables", "ProtectControlGroups",
+		"MemoryMax", "MemoryHigh", "MemoryLimit", "MemorySwapMax", "TasksMax", "CPUQuota", "IOWeight",
+		"ProtectSystem", "ProtectHome", "PrivateTmp", "PrivateNetwork", "PrivateUsers", "PrivateMounts",
+		"InaccessiblePaths", "TemporaryFileSystem", "RootDirectory", "RootImage",
+		"SystemCallFilter", "SystemCallArchitectures", "RestrictAddressFamilies", "RestrictNamespaces",
+		"RestrictSUIDSGID", "NoNewPrivileges", "CapabilityBoundingSet", "MemoryDenyWriteExecute",
+		"ProtectHostname", "RestrictRealtime", "LockPersonality", "UMask=0077",
+	}
+	for _, line := range strings.Split(unit, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		for _, f := range forbidden {
+			if strings.HasPrefix(line, f) {
+				t.Errorf("unit has %q, which can break package upgrades run by the agent", line)
+			}
 		}
 	}
 }
