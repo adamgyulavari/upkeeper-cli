@@ -2,12 +2,14 @@ package main
 
 import (
 	"bytes"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/adamgyulavari/upkeeper-cli/agent/config"
 	"github.com/adamgyulavari/upkeeper-cli/agent/fakes"
+	"github.com/adamgyulavari/upkeeper-cli/agent/policy"
 )
 
 func TestVersion(t *testing.T) {
@@ -68,5 +70,84 @@ func TestUsage(t *testing.T) {
 	}
 	if code := run([]string{"apply"}, &out, &errb); code != 2 {
 		t.Errorf("unknown command code=%d", code)
+	}
+}
+
+func dirs(t *testing.T) []string {
+	uid := os.Getuid()
+	policyOwner = &uid
+	d := t.TempDir()
+	os.Chmod(d, 0o755)
+	os.MkdirAll(filepath.Join(d, "etc"), 0o755)
+	return []string{"--policy", filepath.Join(d, "etc", "policy.yaml"), "--state-dir", filepath.Join(d, "state"), "--config", filepath.Join(d, "etc", "agent.json")}
+}
+
+func TestPolicyCommands(t *testing.T) {
+	flags := dirs(t)
+	var out, errb bytes.Buffer
+	isRoot = func() bool { return false }
+	if code := run(append([]string{"policy", "set", "auto"}, flags...), &out, &errb); code != 1 || !strings.Contains(errb.String(), "needs root") {
+		t.Errorf("non-root set: %d %s", code, errb.String())
+	}
+	isRoot = func() bool { return true }
+	defer func() { isRoot = func() bool { return os.Geteuid() == 0 } }()
+	out.Reset()
+	if code := run(append([]string{"policy", "show"}, flags...), &out, &errb); code != 0 || !strings.Contains(out.String(), "Mode: observe") {
+		t.Errorf("show: %s", out.String())
+	}
+	out.Reset()
+	if code := run(append([]string{"policy", "set", "auto"}, flags...), &out, &errb); code != 0 || !strings.Contains(out.String(), "dry run first") {
+		t.Errorf("set: %d %s %s", code, out.String(), errb.String())
+	}
+	if code := run(append([]string{"policy", "set", "yolo"}, flags...), &out, &errb); code != 2 {
+		t.Errorf("bad mode: %d", code)
+	}
+	out.Reset()
+	if code := run(append([]string{"policy", "window", "sun 03:00-05:00"}, flags...), &out, &errb); code != 0 {
+		t.Errorf("window: %d %s", code, errb.String())
+	}
+	out.Reset()
+	run(append([]string{"status"}, flags...), &out, &errb)
+	for _, want := range []string{"Mode: auto", "Window: sun 03:00-05:00", "Frozen: no", "Root keys: none in this build", "Job key: no job has arrived yet"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("status lacks %q:\n%s", want, out.String())
+		}
+	}
+}
+
+func TestUnfreeze(t *testing.T) {
+	flags := dirs(t)
+	isRoot = func() bool { return true }
+	defer func() { isRoot = func() bool { return os.Geteuid() == 0 } }()
+	var out, errb bytes.Buffer
+	stateDir := flags[3]
+	uid := os.Getuid()
+	s := policy.Store{Path: flags[1], StateDir: stateDir, OwnerUID: &uid}
+	s.FreezeNow("redis didn't come back.", "job_1")
+	if code := run(append([]string{"unfreeze"}, flags...), &out, &errb); code != 0 || !strings.Contains(out.String(), "redis didn't come back.") {
+		t.Errorf("unfreeze: %d %s %s", code, out.String(), errb.String())
+	}
+	if s.Frozen().Frozen {
+		t.Error("still frozen")
+	}
+	out.Reset()
+	run(append([]string{"unfreeze"}, flags...), &out, &errb)
+	if !strings.Contains(out.String(), "isn't frozen") {
+		t.Error(out.String())
+	}
+}
+
+func TestEnrollTokenFromEnvAndStdin(t *testing.T) {
+	cloud := fakes.NewCloud()
+	defer cloud.Srv.Close()
+	cfgPath := filepath.Join(t.TempDir(), "agent.json")
+	var out, errb bytes.Buffer
+	if code := runCLI([]string{"enroll", "-", "--url", cloud.Srv.URL, "--config", cfgPath}, strings.NewReader("enr_test\n"), &out, &errb); code != 0 {
+		t.Fatalf("stdin: %d %s", code, errb.String())
+	}
+	cloud.EnrollToken = "enr_two"
+	t.Setenv("UPKEEPER_ENROLL_TOKEN", "enr_two")
+	if code := run([]string{"enroll", "--url", cloud.Srv.URL, "--config", cfgPath}, &out, &errb); code != 0 {
+		t.Fatalf("env: %d %s", code, errb.String())
 	}
 }

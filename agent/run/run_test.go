@@ -143,7 +143,9 @@ func TestAutoRunAppliesAndVerifies(t *testing.T) {
 	if !ok || err != nil || ov["redis"] != "redis:7.4.2@"+dgNew || len(ov) != 1 {
 		t.Errorf("override %v %v %v", ov, ok, err)
 	}
-	want := []string{"apt-get update", "apt-get install openssl=3.0.13-0ubuntu3.5", "pull redis@" + dgNew, "tag sha256:redis-7.4.2 redis:7.4.2", "pull nginx@" + dgLatst, "tag sha256:nginx-new nginx:latest", "compose up app redis,web files=2"}
+	want := []string{"apt-get update", "apt-get install openssl=3.0.13-0ubuntu3.5",
+		"pull redis@" + dgNew, "tag sha256:redis-7.4.2 redis:7.4.2", "compose up app redis files=2",
+		"pull nginx@" + dgLatst, "tag sha256:nginx-new nginx:latest", "compose up app web files=2"}
 	if !slices.Equal(ev.w.Calls, want) {
 		t.Errorf("calls\n got %v\nwant %v", ev.w.Calls, want)
 	}
@@ -219,6 +221,10 @@ func TestStillRedAfterUndoFreezes(t *testing.T) {
 	}
 	if !strings.Contains(res.FrozenReason, "still unhealthy after the previous images were put back") {
 		t.Errorf("reason %q", res.FrozenReason)
+		for _, e := range ev.events {
+			t.Logf("%s %s %s", e.Step, e.Status, e.Message)
+		}
+		t.Log(ev.w.Calls)
 	}
 	checkVoice(t, ev, res)
 }

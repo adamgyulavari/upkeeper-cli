@@ -732,6 +732,10 @@ func (r *runner) imageStep(items []planned) {
 			skipAll("These containers aren't part of a Compose project, so upkeeper.sh leaves their images alone.")
 			continue
 		}
+		if len(r.before.Project(name)) == 0 {
+			skipAll("It wasn't in the inventory taken at the start, so there's nothing to check it against.")
+			continue
+		}
 		if why := projectHealthy(r.before, name); why != "" {
 			skipAll("Skipped: " + why + ".")
 			continue
@@ -780,92 +784,95 @@ func (r *runner) project(name string, ps []planned) {
 		skipAll("Can't verify the directory for " + OverrideName + " (" + err.Error() + ").")
 		return
 	}
-	ov, haveOv, err := ReadOverride(overridePath)
+	ov, _, err := ReadOverride(overridePath)
 	if err != nil {
 		skipAll(err.Error() + ".")
 		return
 	}
 	r.ev(protocol.StepImages, protocol.StepStart, fmt.Sprintf("%s: updating %d services.", name, len(ps)), "project", name, "dir", pi.WorkDir)
 
-	var changes []Change
-	var services []string
+	// One item at a time, so a red check undoes only the update that broke.
 	for _, p := range ps {
-		u := p.img
-		svc, ok := r.service(u.Project, u.Service)
-		if !ok {
-			r.skip(p.item, "The service isn't running any more.", true)
+		if r.stopped {
+			r.skip(p.item, "The run stopped before this update.", true)
 			continue
 		}
-		repo, _ := splitRef(svc.Image)
-		if u.ToDigest == "" {
-			r.skip(p.item, "The new version's digest couldn't be confirmed when planning, so it waits for the next run.", true)
+		if r.windowPassed() {
+			r.skip(p.item, "The maintenance window ended before this update's turn.", true)
 			continue
 		}
-		target := repo + "@" + u.ToDigest
-		label := u.Service + " " + u.ToTag
-		if u.NewDigest {
-			label = u.Service + " (new " + u.ToTag + " image)"
-		}
-		if r.dry {
-			r.ev(protocol.StepImages, protocol.StepOK, fmt.Sprintf("Would pull %s and recreate %s.", target, u.Service), "service", u.Service, "image", target)
-			r.applied(p.item)
-			continue
-		}
-		ctx, cancel := r.write(pullTimeout)
-		err := e.Docker.Pull(ctx, target)
-		cancel()
-		if err != nil {
-			r.skip(p.item, fmt.Sprintf("Couldn't download the new image (%v). Nothing changed.", err), true)
-			r.ev(protocol.StepImages, protocol.StepWarn, fmt.Sprintf("Couldn't download %s; %s stays as it is.", target, u.Service))
-			continue
-		}
-		newID, err := e.Docker.ImageID(r.ctx, target)
-		if err != nil {
-			r.skip(p.item, fmt.Sprintf("The pulled image can't be found (%v). Nothing changed.", err), true)
-			continue
-		}
-		oldID := pi.ImageIDs[u.Service]
-		if newID == oldID {
-			r.skip(p.item, "It already runs this exact image, so it wasn't recreated.", false)
-			continue
-		}
-		ch := Change{Item: p.item, Project: name, Service: u.Service, Floating: u.NewDigest, Repo: repo, Tag: u.ToTag, OldImageID: oldID, NewImage: target, Override: overridePath}
-		ctx, cancel = r.write(time.Minute)
-		err = e.Docker.Tag(ctx, newID, repo, u.ToTag)
-		cancel()
-		if err != nil {
-			r.skip(p.item, fmt.Sprintf("Couldn't tag the new image (%v).", err), true)
-			continue
-		}
-		if !u.NewDigest {
-			ch.OldEntry = ov[u.Service]
-			ov[u.Service] = repo + ":" + u.ToTag + "@" + u.ToDigest
-		}
-		changes = append(changes, ch)
-		services = append(services, u.Service)
-		r.state.Changes = append(r.state.Changes, ch)
-		r.save()
-		r.ev(protocol.StepImages, protocol.StepOK, "Pulled "+label+".", "service", u.Service, "image", target)
+		r.imageItem(name, pi, overridePath, ov, p)
 	}
-	if r.dry || len(changes) == 0 {
+}
+
+// imageItem pulls, recreates and checks one service; red means L1.
+func (r *runner) imageItem(name string, pi ProjectInfo, overridePath string, ov Override, p planned) {
+	e := r.e
+	u := p.img
+	svc, ok := r.service(u.Project, u.Service)
+	if !ok {
+		r.skip(p.item, "The service isn't running any more.", true)
+		return
+	}
+	repo, _ := splitRef(svc.Image)
+	if u.ToDigest == "" {
+		r.skip(p.item, "The new version's digest couldn't be confirmed when planning, so it waits for the next run.", true)
+		return
+	}
+	target := repo + "@" + u.ToDigest
+	label := u.Service + " " + u.ToTag
+	if u.NewDigest {
+		label = u.Service + " (new " + u.ToTag + " image)"
+	}
+	if r.dry {
+		r.ev(protocol.StepImages, protocol.StepOK, fmt.Sprintf("Would pull %s, recreate %s and check %s for %s.", target, u.Service, name, dur(e.ProjectVerify, 3*time.Minute)), "service", u.Service, "image", target)
+		r.applied(p.item)
+		return
+	}
+	ctx, cancel := r.write(pullTimeout)
+	err := e.Docker.Pull(ctx, target)
+	cancel()
+	if err != nil {
+		r.skip(p.item, fmt.Sprintf("Couldn't download the new image (%v). Nothing changed.", err), true)
+		r.ev(protocol.StepImages, protocol.StepWarn, fmt.Sprintf("Couldn't download %s; %s stays as it is.", target, u.Service))
+		return
+	}
+	newID, err := e.Docker.ImageID(r.ctx, target)
+	if err != nil {
+		r.skip(p.item, fmt.Sprintf("The pulled image can't be found (%v). Nothing changed.", err), true)
+		return
+	}
+	oldID := pi.ImageIDs[u.Service]
+	if newID == oldID {
+		r.skip(p.item, "It already runs this exact image, so it wasn't recreated.", false)
+		return
+	}
+	ch := Change{Item: p.item, Project: name, Service: u.Service, Floating: u.NewDigest, Repo: repo, Tag: u.ToTag, OldImageID: oldID, NewImage: target, Override: overridePath}
+	ctx, cancel = r.write(time.Minute)
+	err = e.Docker.Tag(ctx, newID, repo, u.ToTag)
+	cancel()
+	if err != nil {
+		r.skip(p.item, fmt.Sprintf("Couldn't tag the new image (%v).", err), true)
 		return
 	}
 	r.changed = true
-	versioned := false
-	for _, c := range changes {
-		if !c.Floating {
-			versioned = true
-		}
-	}
-	if versioned {
+	changes := []Change{ch}
+	services := []string{u.Service}
+	r.state.Changes = changes
+	r.save()
+	r.ev(protocol.StepImages, protocol.StepOK, "Pulled "+label+".", "service", u.Service, "image", target)
+	haveOv := len(ov) > 0
+	if !u.NewDigest {
+		changes[0].OldEntry = ov[u.Service]
+		ov[u.Service] = repo + ":" + u.ToTag + "@" + u.ToDigest
 		if err := WriteOverride(overridePath, ov); err != nil {
-			r.undo(name, pi, overridePath, ov, changes, services, "Couldn't write "+OverrideName+" ("+err.Error()+").")
+			r.undo(name, label, pi, overridePath, ov, changes, services, "Couldn't write "+OverrideName+" ("+err.Error()+").")
 			return
 		}
-		haveOv = len(ov) > 0
+		haveOv = true
 	}
 	if err := e.Trust.Recheck(pi, pi.MountSources); err != nil {
-		r.undo(name, pi, overridePath, ov, changes, services, "The project's files changed during the run ("+err.Error()+").")
+		r.undo(name, label, pi, overridePath, ov, changes, services, "The project's files changed during the run ("+err.Error()+").")
 		return
 	}
 	reasons := r.composeUp(pi, overridePath, haveOv, services)
@@ -875,16 +882,14 @@ func (r *runner) project(name string, ps []planned) {
 		r.notes(res)
 		reasons = res.Reasons
 		if res.Green {
-			for _, c := range changes {
-				r.applied(c.Item)
-			}
+			r.applied(ch.Item)
 			r.state.Changes = nil
 			r.save()
-			r.ev(protocol.StepVerify, protocol.StepOK, fmt.Sprintf("%s is healthy with the new images.", name))
+			r.ev(protocol.StepVerify, protocol.StepOK, fmt.Sprintf("%s is healthy with %s.", name, label))
 			return
 		}
 	}
-	r.undo(name, pi, overridePath, ov, changes, services, strings.Join(reasons, " "))
+	r.undo(name, label, pi, overridePath, ov, changes, services, strings.Join(reasons, " "))
 }
 
 func dirOf(p string) string {
@@ -909,9 +914,9 @@ func (r *runner) composeUp(pi ProjectInfo, override string, haveOv bool, service
 }
 
 // undo is L1: put the previous images back, recreate, verify again.
-func (r *runner) undo(name string, pi ProjectInfo, overridePath string, ov Override, changes []Change, services []string, why string) {
+func (r *runner) undo(name, label string, pi ProjectInfo, overridePath string, ov Override, changes []Change, services []string, why string) {
 	e := r.e
-	r.ev(protocol.StepImages, protocol.StepFail, fmt.Sprintf("%s didn't come back healthy: %s", name, why))
+	r.ev(protocol.StepImages, protocol.StepFail, fmt.Sprintf("%s didn't come back healthy: %s", label, why))
 	var failed []string
 	for _, c := range changes {
 		if c.Floating {
@@ -934,7 +939,7 @@ func (r *runner) undo(name string, pi ProjectInfo, overridePath string, ov Overr
 		failed = append(failed, OverrideName+" ("+err.Error()+")")
 	}
 	if len(failed) > 0 {
-		r.stop(protocol.StepImages, fmt.Sprintf("%s didn't come back healthy, and putting the previous images back failed for %s. The server is frozen so nothing else changes until you look.", name, strings.Join(failed, ", ")))
+		r.stop(protocol.StepImages, fmt.Sprintf("%s didn't come back healthy, and putting the previous image back failed for %s. The server is frozen so nothing else changes until you look.", label, strings.Join(failed, ", ")))
 		return
 	}
 	_, haveOv, _ := ReadOverride(overridePath)
