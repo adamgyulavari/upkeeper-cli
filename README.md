@@ -53,7 +53,7 @@ make check   # go vet + go test
 make build   # static linux/amd64 and linux/arm64 binaries + checksums in bin/
 ```
 
-Releases are published by pushing a `v*` tag.
+Releases are published by bumping `VERSION` on `main`: the Release workflow creates the tag and the release.
 
 ## License
 
