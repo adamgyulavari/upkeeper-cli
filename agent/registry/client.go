@@ -82,6 +82,8 @@ func checkRedirect(req *http.Request, via []*http.Request) error {
 var tokenHosts = map[string][]string{
 	"docker.io":           {"auth.docker.io"},
 	"registry.gitlab.com": {"gitlab.com"},
+	"lscr.io":             {"ghcr.io"},                // LinuxServer's registry hands out ghcr.io tokens
+	"docker.elastic.co":   {"docker-auth.elastic.co"}, // Elastic's token server
 }
 
 // tagRe is the OCI tag grammar.

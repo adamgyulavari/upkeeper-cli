@@ -194,6 +194,12 @@ main() {
 		base="https://github.com/${REPO}/releases/download/${version}"
 	fi
 
+	# Restarting the agent in the middle of a run stops the run and freezes
+	# the server, so an upgrade waits until no run is recorded.
+	if $SUDO test -f /var/lib/upkeeper/run.json; then
+		fail "a maintenance run is in progress (see: upkeeper status). Run the installer again when it has finished. Nothing was changed."
+	fi
+
 	tmp="$(mktemp -d)"
 	trap 'rm -rf "$tmp"' EXIT INT TERM
 
