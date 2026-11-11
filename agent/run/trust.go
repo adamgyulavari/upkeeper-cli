@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"syscall"
 )
@@ -25,8 +26,13 @@ import (
 //   - every file is a regular file (not a symlink), and it and every
 //     directory above it are owned by root and not writable by group or
 //     others;
+//   - no compose file uses include: or extends:, which read other files;
 //   - the files' content is the same right before `compose up` as when
 //     they were checked.
+//
+// On top of that, agent/run asks Compose for each service's config hash
+// and requires it to equal the running container's label, so a run only
+// ever changes the image.
 //
 // A project that fails any of this is skipped, with the reason.
 
@@ -142,10 +148,7 @@ func (pc PathChecker) CheckProject(pi *ProjectInfo, mountSources []string) error
 	if _, err := os.Lstat(filepath.Join(pi.WorkDir, ".env")); err == nil {
 		files = append(files, filepath.Join(pi.WorkDir, ".env"))
 	}
-	for _, f := range files {
-		if filepath.Base(f) == OverrideName {
-			continue // checked when it's read or written
-		}
+	for i, f := range files {
 		if err := pc.CheckPath(f, false, mountSources); err != nil {
 			return err
 		}
@@ -154,8 +157,41 @@ func (pc PathChecker) CheckProject(pi *ProjectInfo, mountSources []string) error
 			return err
 		}
 		pi.Hashes[f] = h
+		if i < len(pi.ConfigFiles) {
+			if what := pullsInFiles(f); what != "" {
+				return fmt.Errorf("%s uses %s, which pulls in other files that upkeeper.sh doesn't check yet", f, what)
+			}
+		}
 	}
 	return nil
+}
+
+var (
+	includeRe = regexp.MustCompile(`(?m)^include\s*:`)
+	extendsRe = regexp.MustCompile(`(?m)^\s+extends\s*:`)
+)
+
+// pullsInFiles reports whether a compose file uses include: or extends:,
+// which can read other compose files. The agent can't vouch for those
+// files, so such projects are skipped (a plain text check: it may also skip
+// an extends: within the same file).
+func pullsInFiles(p string) string {
+	f, err := os.OpenFile(p, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	b, err := io.ReadAll(io.LimitReader(f, 16<<20))
+	if err != nil {
+		return ""
+	}
+	switch {
+	case includeRe.Match(b):
+		return "include:"
+	case extendsRe.Match(b):
+		return "extends:"
+	}
+	return ""
 }
 
 // Recheck confirms the files are unchanged since CheckProject.

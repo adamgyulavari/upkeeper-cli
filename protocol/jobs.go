@@ -181,6 +181,9 @@ const (
 type SkippedItem struct {
 	Item   Item   `json:"item"`
 	Reason string `json:"reason"`
+	// Code is a Risk code when the item was skipped because of one (for
+	// example compose_mismatch). Optional; older agents never set it.
+	Code string `json:"code,omitempty"`
 }
 
 type RunResult struct {
@@ -195,4 +198,8 @@ type RunResult struct {
 	Summary      string        `json:"summary"` // one plain sentence
 	StartedAt    time.Time     `json:"started_at"`
 	FinishedAt   time.Time     `json:"finished_at"`
+	// Risks the run found that keep items from being applied (for example
+	// a project whose compose files no longer match what's running).
+	// Optional; older agents never set it. Reports carry them too.
+	Risks []Risk `json:"risks,omitempty"`
 }

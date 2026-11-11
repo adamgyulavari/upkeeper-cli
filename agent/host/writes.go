@@ -25,19 +25,23 @@ func IsDockerFamily(pkg string) bool {
 	return DockerFamily[pkg] || strings.HasPrefix(pkg, "docker-ce-") || strings.HasPrefix(pkg, "moby-")
 }
 
+// AptLockTimeout makes apt wait up to two minutes for a lock that another
+// program (apt-daily, unattended-upgrades) holds, instead of failing at once.
+var AptLockTimeout = []string{"-o", "DPkg::Lock::Timeout=120"}
+
 var (
 	// AptUpdate refreshes the package lists.
-	AptUpdate = []string{"update"}
+	AptUpdate = append(slices.Clone(AptLockTimeout), "update")
 
 	// aptInstallPrefix upgrades already installed packages to exact
 	// versions, keeping the user's changed config files (confold) and
 	// taking the package's default where there is no change (confdef).
-	aptInstallPrefix = []string{
+	aptInstallPrefix = append(slices.Clone(AptLockTimeout),
 		"-y", "-o", "Dpkg::Options::=--force-confdef", "-o", "Dpkg::Options::=--force-confold",
 		"install", "--only-upgrade",
-	}
+	)
 	// aptSimInstallPrefix simulates that install without writing apt's caches.
-	aptSimInstallPrefix = append(slices.Clone(AptNoCache), "-s", "install", "--only-upgrade")
+	aptSimInstallPrefix = append(append(slices.Clone(AptLockTimeout), AptNoCache...), "-s", "install", "--only-upgrade")
 
 	// pkg=version. Neither part may end in "-" or "+", which apt reads as
 	// "remove" or "install" suffixes.
@@ -180,6 +184,90 @@ func ParseComposeUp(args []string) (ComposeUp, bool) {
 		return c, false
 	}
 	c.Services = slices.Clone(args[i+len(composeUpTail):])
+	if !c.Valid() || !slices.Equal(c.Args(), args) {
+		return c, false
+	}
+	return c, true
+}
+
+// AptTimers are the systemd timers that start apt on their own (package
+// list refresh and unattended-upgrades). A run pauses the ones that are
+// active, so they can't take apt's lock halfway through, and starts them
+// again at the end:
+//
+//	systemctl stop TIMER     systemctl start TIMER
+//
+// TIMER is one of these exact names; nothing else can be stopped or started.
+var AptTimers = []string{"apt-daily.timer", "apt-daily-upgrade.timer"}
+
+// TimerStop and TimerStart are the argument lists for pausing and resuming
+// one of AptTimers.
+func TimerStop(timer string) []string  { return []string{"stop", timer} }
+func TimerStart(timer string) []string { return []string{"start", timer} }
+
+// TimerIsActive is the read-only check (`systemctl is-active TIMER`).
+func TimerIsActive(timer string) []string { return []string{"is-active", timer} }
+
+func systemctlWriteAllowed(args []string) bool {
+	return len(args) == 2 && (args[0] == "stop" || args[0] == "start") && slices.Contains(AptTimers, args[1])
+}
+
+// ComposeConfig is the read-only `docker compose … config` call the run
+// uses to check that a project's files still describe what's running:
+//
+//	docker compose --project-directory DIR -p NAME -f FILE… config --hash SVC[,SVC…]
+//	docker compose --project-directory DIR -p NAME -f FILE… config --format json SVC…
+//
+// --hash prints each service's config hash, the value Compose stores in the
+// container label com.docker.compose.config-hash; --format json gives the
+// replica count. Neither writes anything.
+type ComposeConfig struct {
+	ProjectDir string
+	Project    string
+	Files      []string
+	Services   []string
+	JSON       bool // --format json instead of --hash
+}
+
+// Args returns the argument list for the docker CLI.
+func (c ComposeConfig) Args() []string {
+	a := []string{"compose", "--project-directory", c.ProjectDir, "-p", c.Project}
+	for _, f := range c.Files {
+		a = append(a, "-f", f)
+	}
+	if c.JSON {
+		return append(append(a, "config", "--format", "json"), c.Services...)
+	}
+	return append(a, "config", "--hash", strings.Join(c.Services, ","))
+}
+
+// Valid checks every part of the command.
+func (c ComposeConfig) Valid() bool {
+	return ComposeUp{ProjectDir: c.ProjectDir, Project: c.Project, Files: c.Files, Services: c.Services}.Valid()
+}
+
+// ParseComposeConfig accepts only the exact shapes Args produces.
+func ParseComposeConfig(args []string) (ComposeConfig, bool) {
+	var c ComposeConfig
+	if len(args) < 5 || args[0] != "compose" || args[1] != "--project-directory" || args[3] != "-p" {
+		return c, false
+	}
+	c.ProjectDir, c.Project = args[2], args[4]
+	i := 5
+	for i+1 < len(args) && args[i] == "-f" {
+		c.Files = append(c.Files, args[i+1])
+		i += 2
+	}
+	rest := args[i:]
+	switch {
+	case len(rest) == 3 && rest[0] == "config" && rest[1] == "--hash":
+		c.Services = strings.Split(rest[2], ",")
+	case len(rest) > 3 && rest[0] == "config" && rest[1] == "--format" && rest[2] == "json":
+		c.JSON = true
+		c.Services = slices.Clone(rest[3:])
+	default:
+		return c, false
+	}
 	if !c.Valid() || !slices.Equal(c.Args(), args) {
 		return c, false
 	}

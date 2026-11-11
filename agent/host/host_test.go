@@ -24,7 +24,9 @@ func TestAllowed(t *testing.T) {
 		{"apt-get", AptSimulateUpgrade, true},
 		{"apt-get", []string{"upgrade", "-y"}, false},
 		{"apt-get", []string{"-s", "upgrade"}, false}, // must disable the on-disk cache too
-		{"apt-get", []string{"update"}, true},
+		{"apt-get", AptUpdate, true},
+		{"apt-get", []string{"update"}, false}, // always with the lock timeout
+		{"apt-get", []string{"-o", "DPkg::Lock::Timeout=99999", "update"}, false},
 		{"apt-get", []string{"update", "-o", "APT::Update::Post-Invoke=rm"}, false},
 		{"apt-get", []string{"install", "-y", "docker-ce"}, false},
 		{"apt-get", AptInstallArgs([]PkgVersion{{"openssl", "3.0.13-0ubuntu3.5"}, {"vim", "2:9.1.0016-1ubuntu7.4"}}), true},
@@ -57,6 +59,21 @@ func TestAllowed(t *testing.T) {
 		{"dpkg", []string{"--configure", "-a"}, false},
 		{"systemctl", SystemctlFailed, true},
 		{"systemctl", []string{"restart", "docker"}, false},
+		{"systemctl", TimerStop("apt-daily.timer"), true},
+		{"systemctl", TimerStart("apt-daily-upgrade.timer"), true},
+		{"systemctl", TimerIsActive("apt-daily.timer"), true},
+		{"systemctl", []string{"stop", "docker.service"}, false},
+		{"systemctl", []string{"stop", "apt-daily.timer", "docker.service"}, false},
+		{"systemctl", []string{"start", "unattended-upgrades.service"}, false},
+		{"systemctl", []string{"disable", "apt-daily.timer"}, false},
+		{"systemctl", []string{"is-active", "docker"}, false},
+		{"docker", ComposeConfig{ProjectDir: "/opt/app", Project: "app", Files: []string{"/opt/app/compose.yml"}, Services: []string{"web", "db"}}.Args(), true},
+		{"docker", ComposeConfig{ProjectDir: "/opt/app", Project: "app", Files: []string{"/opt/app/compose.yml"}, Services: []string{"web"}, JSON: true}.Args(), true},
+		{"docker", ComposeConfig{ProjectDir: "/opt/app", Project: "app", Files: []string{"/opt/app/compose.yml"}, Services: []string{"--output=/etc/x"}}.Args(), false},
+		{"docker", []string{"compose", "--project-directory", "/opt/app", "-p", "app", "-f", "/opt/app/compose.yml", "config", "-o", "/etc/passwd"}, false},
+		{"docker", []string{"compose", "--project-directory", "/opt/app", "-p", "app", "-f", "/opt/app/compose.yml", "config", "--hash", "web", "-o", "/tmp/x"}, false},
+		{"docker", []string{"compose", "--project-directory", "/opt/app", "-p", "app", "-f", "/opt/app/compose.yml", "config", "--hash", "*"}, false},
+		{"docker", []string{"compose", "--project-directory", "/opt/app", "-p", "app", "-f", "/opt/app/compose.yml", "config", "--format", "json", "--lock-image-digests"}, false},
 		{"docker", []string{"pull", "nginx"}, false},
 		{"docker", ComposeUp{ProjectDir: "/opt/app", Project: "app", Files: []string{"/opt/app/compose.yml", "/opt/app/compose.override.upkeeper.yml"}, Services: []string{"web"}}.Args(), true},
 		{"docker", ComposeUp{ProjectDir: "/opt/my app", Project: "app", Files: []string{"/opt/my app/compose.yml"}, Services: []string{"web", "worker_1"}}.Args(), true},
@@ -84,6 +101,21 @@ func TestAllowed(t *testing.T) {
 		}
 		if err != nil && !errors.Is(err, ErrNotAllowed) {
 			t.Errorf("error should wrap ErrNotAllowed: %v", err)
+		}
+	}
+}
+
+func TestParseComposeConfigRoundTrip(t *testing.T) {
+	for _, c := range []ComposeConfig{
+		{ProjectDir: "/srv/a", Project: "a", Files: []string{"/srv/a/compose.yml", "/srv/a/compose.override.upkeeper.yml"}, Services: []string{"redis", "web"}},
+		{ProjectDir: "/srv/a", Project: "a", Files: []string{"/srv/a/compose.yml"}, Services: []string{"redis"}, JSON: true},
+	} {
+		got, ok := ParseComposeConfig(c.Args())
+		if !ok || !slices.Equal(got.Args(), c.Args()) || got.JSON != c.JSON {
+			t.Errorf("round trip %+v: %+v %v", c, got, ok)
+		}
+		if _, up := ParseComposeUp(c.Args()); up {
+			t.Errorf("config parsed as up: %v", c.Args())
 		}
 	}
 }
@@ -209,7 +241,7 @@ func TestWriteActionsOnlyInRun(t *testing.T) {
 			[]string{"agent/config/config.go", "agent/registry/cache.go", "agent/policy/", "agent/run/", "agent/jobs/", "agent/statefile/"},
 			"writes only to the agent's own files and, in agent/run, the override file"},
 		{regexp.MustCompile(`http\.Method(Post|Put|Delete|Patch)|"(POST|PUT|DELETE|PATCH)"`), []string{"agent/cloudclient/client.go", "agent/run/docker.go"}, "only the cloud client and the run engine's Docker calls post"},
-		{regexp.MustCompile(`host\.(AptUpdate|AptInstallArgs|ComposeUp)\b`), []string{"agent/run/"}, "write commands are built only in agent/run"},
+		{regexp.MustCompile(`host\.(AptUpdate|AptInstallArgs|ComposeUp|TimerStop|TimerStart)\b`), []string{"agent/run/"}, "write commands are built only in agent/run"},
 		{regexp.MustCompile(`images/create|"/tag"|/containers/[^"]*/(start|stop|kill|restart|update)|"(DELETE|delete)"`), []string{"agent/run/docker.go"}, "Engine API writes only in agent/run/docker.go"},
 	}
 	allowed := func(list []string, rel string) bool {

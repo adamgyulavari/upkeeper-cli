@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"net"
 	"slices"
 	"sort"
 	"strconv"
@@ -65,14 +66,23 @@ func (h HostSource) Snapshot(ctx context.Context, projects []string) Inventory {
 			labels = ci.Config.Labels
 		}
 		c := Container{
-			ID:           ci.ID,
-			Name:         strings.TrimPrefix(ci.Name, "/"),
-			Project:      labels["com.docker.compose.project"],
-			Service:      labels["com.docker.compose.service"],
-			State:        ci.State.Status,
-			Health:       "none",
-			RestartCount: ci.RestartCount,
-			OOMKilled:    ci.State.OOMKilled,
+			ID:            ci.ID,
+			Name:          strings.TrimPrefix(ci.Name, "/"),
+			Project:       labels["com.docker.compose.project"],
+			Service:       labels["com.docker.compose.service"],
+			State:         ci.State.Status,
+			Health:        "none",
+			RestartCount:  ci.RestartCount,
+			OOMKilled:     ci.State.OOMKilled,
+			ExitCode:      ci.State.ExitCode,
+			AutoRemove:    ci.HostConfig.AutoRemove,
+			RestartPolicy: ci.HostConfig.RestartPolicy.Name,
+		}
+		if c.RestartPolicy == "" {
+			c.RestartPolicy = "no"
+		}
+		if hc := ci.Config.Healthcheck; !hc.Disabled() {
+			c.HealthWait, c.HealthFirst = HealthTimes(hc.Interval, hc.Timeout, hc.StartPeriod, hc.StartInterval, hc.Retries)
 		}
 		if c.Project == "" {
 			c.Project, c.Service = collect.StandaloneProject, c.Name
@@ -84,6 +94,7 @@ func (h HostSource) Snapshot(ctx context.Context, projects []string) Inventory {
 			c.Health = ci.State.Health.Status
 		}
 		binds := collect.PortBindIPs(cs.Ports)
+		ip := ContainerIP(ci)
 		seen := map[string]bool{}
 		for _, p := range cs.Ports {
 			proto := p.Type
@@ -97,7 +108,12 @@ func (h HostSource) Snapshot(ctx context.Context, projects []string) Inventory {
 			seen[k] = true
 			c.Ports = append(c.Ports, protoPort(p.PublicPort, proto))
 			if proto == "tcp" && c.State == "running" {
-				probes = append(probes, probe{len(inv.Containers), len(c.Ports) - 1, collect.ProbeTarget(binds[k], p.PublicPort)})
+				addr := collect.ProbeTarget(binds[k], p.PublicPort)
+				if ip != "" && p.PrivatePort > 0 {
+					// The container itself, not docker-proxy on the host.
+					addr = net.JoinHostPort(ip, strconv.Itoa(p.PrivatePort))
+				}
+				probes = append(probes, probe{len(inv.Containers), len(c.Ports) - 1, addr})
 			}
 		}
 		inv.Containers = append(inv.Containers, c)
@@ -123,6 +139,22 @@ func (h HostSource) Snapshot(ctx context.Context, projects []string) Inventory {
 		return a.Name < b.Name
 	})
 	return inv
+}
+
+// ContainerIP returns the container's address on its first network (by
+// name) that has one, or "" (host network, or no network).
+func ContainerIP(ci dockerapi.ContainerInspect) string {
+	names := make([]string, 0, len(ci.NetworkSettings.Networks))
+	for n := range ci.NetworkSettings.Networks {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	for _, n := range names {
+		if ip := ci.NetworkSettings.Networks[n].IPAddress; ip != "" && net.ParseIP(ip) != nil {
+			return ip
+		}
+	}
+	return ""
 }
 
 // LogPatterns are log lines worth a note in the run record.

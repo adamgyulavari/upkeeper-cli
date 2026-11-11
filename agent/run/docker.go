@@ -8,7 +8,9 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
@@ -18,11 +20,18 @@ import (
 // ProjectInfo is what's needed to run `docker compose up` for a project
 // exactly the way it was started: from its containers' Compose labels.
 type ProjectInfo struct {
-	Name         string
-	WorkDir      string
+	Name    string
+	WorkDir string
+	// ConfigFiles are the user's compose files from the
+	// com.docker.compose.project.config_files label, without the agent's
+	// own override (Override), which Compose lists there too once the
+	// agent has recreated a service with it.
 	ConfigFiles  []string
+	Override     string            // path of the agent's override file for this project
 	EnvFileLabel string            // com.docker.compose.project.environment_file, if set
 	ImageIDs     map[string]string // service → image ID of its running container
+	// Services holds what each service's containers say about themselves.
+	Services map[string]ServiceInfo
 	// MountSources are host paths every container on the server can write
 	// to (all containers, not only this project's).
 	MountSources []string
@@ -34,6 +43,46 @@ type ProjectInfo struct {
 	Inconsistent string
 	// Hashes of the compose files and .env, set by PathChecker.CheckProject.
 	Hashes map[string]string
+}
+
+// ServiceInfo is one Compose service as its containers describe it.
+type ServiceInfo struct {
+	Containers int      // containers of the service (not one-off runs), in any state
+	Running    int      // of those, running
+	Hashes     []string // distinct com.docker.compose.config-hash labels, sorted
+	Image      string   // the image as the container was created with (Config.Image)
+	ImageID    string
+}
+
+// ConfigHash is the service's config hash when all its containers agree.
+func (s ServiceInfo) ConfigHash() (string, bool) {
+	if len(s.Hashes) != 1 || s.Hashes[0] == "" {
+		return "", false
+	}
+	return s.Hashes[0], true
+}
+
+// OverridePath is where the agent keeps its override for a project whose
+// first compose file is first.
+func OverridePath(first string) string {
+	return filepath.Join(filepath.Dir(first), OverrideName)
+}
+
+// UserFiles drops the agent's override from a config_files label list. The
+// override is the file named OverrideName next to the first other file;
+// a file with that name anywhere else is the user's and stays.
+func UserFiles(files []string) (user []string, override string) {
+	for _, f := range files {
+		if override == "" && filepath.Base(f) != OverrideName {
+			override = OverridePath(f)
+		}
+	}
+	for _, f := range files {
+		if f != override && !slices.Contains(user, f) {
+			user = append(user, f)
+		}
+	}
+	return user, override
 }
 
 // DockerOps is the agent's door to Docker for a run: reads, plus the two
@@ -74,14 +123,26 @@ func splitList(s string) []string {
 	return out
 }
 
+// Label names Compose writes on containers.
+const (
+	LabelProject     = "com.docker.compose.project"
+	LabelService     = "com.docker.compose.service"
+	LabelWorkingDir  = "com.docker.compose.project.working_dir"
+	LabelConfigFiles = "com.docker.compose.project.config_files"
+	LabelEnvFile     = "com.docker.compose.project.environment_file"
+	LabelConfigHash  = "com.docker.compose.config-hash"
+	LabelOneoff      = "com.docker.compose.oneoff"
+)
+
 func (e *EngineOps) Project(ctx context.Context, name string) (ProjectInfo, error) {
-	pi := ProjectInfo{Name: name, ImageIDs: map[string]string{}}
+	pi := ProjectInfo{Name: name, ImageIDs: map[string]string{}, Services: map[string]ServiceInfo{}}
 	list, err := e.API.Containers(ctx)
 	if err != nil {
 		return pi, err
 	}
 	sort.Slice(list, func(i, j int) bool { return list[i].ID < list[j].ID })
 	first := true
+	images := map[string]bool{}
 	for _, c := range list {
 		ci, err := e.API.Inspect(ctx, c.ID)
 		if err != nil {
@@ -93,30 +154,50 @@ func (e *EngineOps) Project(ctx context.Context, name string) (ProjectInfo, erro
 			}
 		}
 		l := ci.Config.Labels
-		if l["com.docker.compose.project"] != name || l["com.docker.compose.oneoff"] == "True" {
+		if l[LabelProject] != name || l[LabelOneoff] == "True" {
 			continue
 		}
-		svc := l["com.docker.compose.service"]
-		if im, err := e.API.Image(ctx, ci.Image); err == nil && len(pi.ImageLabels) == 0 {
+		svc := l[LabelService]
+		if !images[ci.Image] {
+			images[ci.Image] = true
+			im, err := e.API.Image(ctx, ci.Image)
+			if err != nil {
+				// Without the image's labels the container's can't be trusted.
+				return pi, fmt.Errorf("can't read the image of %s: %w", svc, err)
+			}
+			var set []string
 			for k := range im.Config.Labels {
 				if strings.HasPrefix(k, "com.docker.compose.") {
-					pi.ImageLabels = append(pi.ImageLabels, k)
-					pi.ImageLabelsFrom = svc
+					set = append(set, k)
 				}
 			}
-			sort.Strings(pi.ImageLabels)
+			if len(set) > 0 && len(pi.ImageLabels) == 0 {
+				sort.Strings(set)
+				pi.ImageLabels, pi.ImageLabelsFrom = set, svc
+			}
 		}
-		wd := l["com.docker.compose.project.working_dir"]
-		files := splitList(l["com.docker.compose.project.config_files"])
-		env := l["com.docker.compose.project.environment_file"]
+		wd := l[LabelWorkingDir]
+		files, override := UserFiles(splitList(l[LabelConfigFiles]))
+		env := l[LabelEnvFile]
 		if first {
-			pi.WorkDir, pi.ConfigFiles, pi.EnvFileLabel, first = wd, files, env, false
+			pi.WorkDir, pi.ConfigFiles, pi.Override, pi.EnvFileLabel, first = wd, files, override, env, false
 		} else if wd != pi.WorkDir || strings.Join(files, ",") != strings.Join(pi.ConfigFiles, ",") || env != pi.EnvFileLabel {
 			pi.Inconsistent = "its containers disagree about the project's directory or compose files"
 		}
-		if _, ok := pi.ImageIDs[svc]; !ok || ci.State.Status == "running" {
-			pi.ImageIDs[svc] = ci.Image
+		si := pi.Services[svc]
+		si.Containers++
+		if ci.State.Status == "running" {
+			si.Running++
 		}
+		if h := l[LabelConfigHash]; !slices.Contains(si.Hashes, h) {
+			si.Hashes = append(si.Hashes, h)
+			sort.Strings(si.Hashes)
+		}
+		if si.ImageID == "" || ci.State.Status == "running" {
+			si.ImageID, si.Image = ci.Image, ci.Config.Image
+		}
+		pi.Services[svc] = si
+		pi.ImageIDs[svc] = si.ImageID
 	}
 	if pi.WorkDir == "" || len(pi.ConfigFiles) == 0 {
 		return pi, fmt.Errorf("no Compose labels with the project's directory and files on its containers")

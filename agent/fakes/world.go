@@ -2,6 +2,8 @@ package fakes
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -55,6 +57,22 @@ type World struct {
 	FreeMB         uint64
 	FailedUnits    []string
 	ComposeVersion string
+	// Installed is package → installed version (dpkg-query); filled from
+	// Apt's From when a package isn't listed.
+	Installed map[string]string
+	// Timers is apt timer → active.
+	Timers map[string]bool
+
+	// Drift is project/service → an edit to the compose files that hasn't
+	// been applied: Compose's hash for the service changes, the running
+	// container's label doesn't.
+	Drift map[string]string
+	// Unset is project → variables Compose warns aren't set.
+	Unset map[string][]string
+	// Replicas is project/service → what the compose file asks for (default 1).
+	Replicas map[string]int
+	// NoDocker: Docker doesn't answer.
+	NoDocker bool
 
 	Calls []string // every write, in order
 	seq   int
@@ -67,6 +85,16 @@ type Container struct {
 	Restarts                      int
 	Port                          int
 	Mounts                        []string // writable mount sources
+	// Compose labels, as `compose up` wrote them.
+	Image       string   // Config.Image
+	ConfigHash  string   // com.docker.compose.config-hash
+	ConfigFiles []string // com.docker.compose.project.config_files
+	// RestartPolicy defaults to unless-stopped; ExitCode for exited ones.
+	RestartPolicy string
+	ExitCode      int
+	AutoRemove    bool
+	HealthWait    time.Duration
+	HealthFirst   time.Duration
 }
 
 // NewWorld builds a world with one Compose project per (project, service,
@@ -76,7 +104,33 @@ func NewWorld(root string) *World {
 		Root: root, Compose: map[string]map[string]string{}, Images: map[string]string{}, Registry: map[string]string{},
 		CrashLoop: map[string]bool{}, Unhealthy: map[string]bool{}, ImageLabels: map[string]map[string]string{},
 		AptGone: map[string]bool{}, FreeMB: 50000, ComposeVersion: "2.29.1",
+		Installed: map[string]string{}, Timers: map[string]bool{"apt-daily.timer": true, "apt-daily-upgrade.timer": true},
+		Drift: map[string]string{}, Unset: map[string][]string{}, Replicas: map[string]int{},
 	}
+}
+
+// configHash is the fake Compose config hash of a service: its image as
+// written plus any unapplied edit.
+func configHash(project, service, image, drift string) string {
+	h := sha256.Sum256([]byte(project + "\x00" + service + "\x00" + image + "\x00" + drift))
+	return hex.EncodeToString(h[:])
+}
+
+// imageFor is the image Compose would use for a service with files.
+func (w *World) imageFor(project, service string, files []string) (string, error) {
+	ref := w.Compose[project][service]
+	for _, f := range files {
+		if filepath.Base(f) == run.OverrideName {
+			o, _, err := run.ReadOverride(f)
+			if err != nil {
+				return "", err
+			}
+			if v, ok := o[service]; ok {
+				ref = v
+			}
+		}
+	}
+	return ref, nil
 }
 
 // AddService adds a running, healthy service. The image ID is derived
@@ -99,7 +153,8 @@ func (w *World) AddService(project, service, image string, port int) *Container 
 	os.WriteFile(filepath.Join(dir, "compose.yml"), []byte(b.String()), 0o644)
 	id := "sha256:" + image
 	w.Images[image] = id
-	c := &Container{ID: w.newID(), Project: project, Service: service, ImageID: id, State: "running", Health: "healthy", Port: port}
+	c := &Container{ID: w.newID(), Project: project, Service: service, ImageID: id, State: "running", Health: "healthy", Port: port,
+		Image: image, ConfigHash: configHash(project, service, image, ""), ConfigFiles: []string{filepath.Join(dir, "compose.yml")}, RestartPolicy: "unless-stopped"}
 	w.Containers = append(w.Containers, c)
 	return c
 }
@@ -169,17 +224,30 @@ func (w *World) Plan(ctx context.Context) (protocol.Report, classify.Input) {
 func (w *World) Project(ctx context.Context, name string) (run.ProjectInfo, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	pi := run.ProjectInfo{Name: name, ImageIDs: map[string]string{}}
+	pi := run.ProjectInfo{Name: name, ImageIDs: map[string]string{}, Services: map[string]run.ServiceInfo{}}
 	for _, c := range w.Containers {
 		pi.MountSources = append(pi.MountSources, c.Mounts...)
 		if c.Project != name {
 			continue
 		}
-		pi.WorkDir = filepath.Join(w.Root, name)
-		pi.ConfigFiles = []string{w.ComposeFile(name)}
-		if _, err := os.Lstat(filepath.Join(pi.WorkDir, run.OverrideName)); err == nil {
-			pi.ConfigFiles = append(pi.ConfigFiles, filepath.Join(pi.WorkDir, run.OverrideName))
+		files, override := run.UserFiles(c.ConfigFiles)
+		if pi.WorkDir == "" {
+			pi.WorkDir = filepath.Join(w.Root, name)
+			pi.ConfigFiles, pi.Override = files, override
+		} else if strings.Join(files, ",") != strings.Join(pi.ConfigFiles, ",") {
+			pi.Inconsistent = "its containers disagree about the project's directory or compose files"
 		}
+		si := pi.Services[c.Service]
+		si.Containers++
+		if c.State == "running" {
+			si.Running++
+		}
+		if !slices.Contains(si.Hashes, c.ConfigHash) {
+			si.Hashes = append(si.Hashes, c.ConfigHash)
+			sort.Strings(si.Hashes)
+		}
+		si.ImageID, si.Image = c.ImageID, c.Image
+		pi.Services[c.Service] = si
 		pi.ImageIDs[c.Service] = c.ImageID
 		for k := range w.ImageLabels[c.ImageID] {
 			if strings.HasPrefix(k, "com.docker.compose.") {
@@ -229,6 +297,10 @@ func (w *World) Snapshot(ctx context.Context, projects []string) verify.Inventor
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	inv := verify.Inventory{DockerOK: true, UnitsOK: true, FailedUnits: append([]string{}, w.FailedUnits...)}
+	if w.NoDocker {
+		inv.DockerOK, inv.DockerErr = false, "no answer on /var/run/docker.sock"
+		return inv
+	}
 	for _, c := range w.Containers {
 		if projects != nil && !slices.Contains(projects, c.Project) {
 			continue
@@ -238,7 +310,8 @@ func (w *World) Snapshot(ctx context.Context, projects []string) verify.Inventor
 			c.State = "restarting"
 		}
 		open := c.State == "running" && c.Health != "unhealthy"
-		vc := verify.Container{ID: c.ID, Name: c.Project + "-" + c.Service + "-1", Project: c.Project, Service: c.Service, State: c.State, Health: c.Health, RestartCount: c.Restarts}
+		vc := verify.Container{ID: c.ID, Name: c.Project + "-" + c.Service + "-1", Project: c.Project, Service: c.Service, State: c.State, Health: c.Health, RestartCount: c.Restarts,
+			RestartPolicy: c.RestartPolicy, ExitCode: c.ExitCode, AutoRemove: c.AutoRemove, HealthWait: c.HealthWait, HealthFirst: c.HealthFirst}
 		if c.Port > 0 {
 			p := protocol.Port{HostPort: c.Port, Proto: "tcp", TCPOpen: open}
 			if open {
@@ -254,11 +327,72 @@ func (w *World) Snapshot(ctx context.Context, projects []string) verify.Inventor
 // ---- host.Runner ----
 
 func (w *World) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
+	out, _, err := w.RunStderr(ctx, name, args...)
+	return out, err
+}
+
+// RunStderr implements host.StderrRunner.
+func (w *World) RunStderr(ctx context.Context, name string, args ...string) ([]byte, []byte, error) {
 	if err := host.Allowed(name, args); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	if name == "docker" {
+		if c, ok := host.ParseComposeConfig(args); ok {
+			return w.composeConfig(c)
+		}
+	}
+	out, err := w.run(name, args)
+	return out, nil, err
+}
+
+func (w *World) composeConfig(c host.ComposeConfig) ([]byte, []byte, error) {
+	var out, stderr strings.Builder
+	for _, v := range w.Unset[c.Project] {
+		fmt.Fprintf(&stderr, "time=\"2026-11-10T03:00:00Z\" level=warning msg=\"The \\\"%s\\\" variable is not set. Defaulting to a blank string.\"\n", v)
+	}
+	if c.JSON {
+		out.WriteString(`{"name":"` + c.Project + `","services":{`)
+		for i, svc := range c.Services {
+			if i > 0 {
+				out.WriteString(",")
+			}
+			n := 1
+			if r, ok := w.Replicas[c.Project+"/"+svc]; ok {
+				n = r
+			}
+			fmt.Fprintf(&out, `"%s":{"image":"x","deploy":{"replicas":%d}}`, svc, n)
+		}
+		out.WriteString("}}")
+		return []byte(out.String()), []byte(stderr.String()), nil
+	}
+	for _, svc := range c.Services {
+		if _, ok := w.Compose[c.Project][svc]; !ok {
+			return nil, nil, fmt.Errorf("docker: exit status 1: no such service: %s", svc)
+		}
+		img, err := w.imageFor(c.Project, svc, c.Files)
+		if err != nil {
+			return nil, nil, err
+		}
+		fmt.Fprintf(&out, "%s %s\n", svc, configHash(c.Project, svc, img, w.Drift[c.Project+"/"+svc]))
+	}
+	return []byte(out.String()), []byte(stderr.String()), nil
+}
+
+func (w *World) installed(pkg string) string {
+	if v, ok := w.Installed[pkg]; ok {
+		return v
+	}
+	for _, u := range w.Apt {
+		if u.Package == pkg {
+			return u.From
+		}
+	}
+	return ""
+}
+
+func (w *World) run(name string, args []string) ([]byte, error) {
 	switch {
 	case name == "apt-get" && slices.Equal(args, host.AptUpdate):
 		w.Calls = append(w.Calls, "apt-get update")
@@ -295,9 +429,28 @@ func (w *World) Run(ctx context.Context, name string, args ...string) ([]byte, e
 		for _, u := range w.Apt {
 			if !slices.Contains(args, u.Package+"="+u.To) {
 				keep = append(keep, u)
+			} else {
+				w.Installed[u.Package] = u.To
 			}
 		}
 		w.Apt = keep
+		return nil, nil
+	case name == "dpkg-query":
+		var out strings.Builder
+		for _, p := range args[2:] {
+			if v := w.installed(p); v != "" {
+				fmt.Fprintf(&out, "%s\t%s\tinstalled\n", p, v)
+			}
+		}
+		return []byte(out.String()), nil
+	case name == "systemctl" && len(args) == 2 && args[0] == "is-active":
+		if w.Timers[args[1]] {
+			return []byte("active\n"), nil
+		}
+		return []byte("inactive\n"), errors.New("systemctl: exit status 3")
+	case name == "systemctl" && len(args) == 2:
+		w.Calls = append(w.Calls, "systemctl "+args[0]+" "+args[1])
+		w.Timers[args[1]] = args[0] == "start"
 		return nil, nil
 	case name == "docker":
 		c, _ := host.ParseComposeUp(args)
@@ -337,6 +490,7 @@ func (w *World) composeUp(c host.ComposeUp) error {
 		if o, ok := ov[svc]; ok {
 			ref = o
 		}
+		hash := configHash(c.Project, svc, ref, w.Drift[c.Project+"/"+svc])
 		id, ok := w.resolve(ref)
 		if !ok {
 			return fmt.Errorf("compose: image %s not found locally and --pull never", ref)
@@ -346,6 +500,7 @@ func (w *World) composeUp(c host.ComposeUp) error {
 				continue
 			}
 			ct.ID, ct.ImageID, ct.Restarts, ct.State, ct.Health = w.newID(), id, 0, "running", "healthy"
+			ct.Image, ct.ConfigHash, ct.ConfigFiles, ct.ExitCode = ref, hash, slices.Clone(c.Files), 0
 			if w.Unhealthy[id] {
 				ct.Health = "unhealthy"
 			}

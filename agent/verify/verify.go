@@ -4,12 +4,23 @@
 // plain language.
 //
 // Rules, for everything that was fine before:
-//   - every container that was running is running;
-//   - healthy wherever a healthcheck is defined (waits up to StartCap);
+//   - every container that was running is running, except one that
+//     finished on its own: it exited with code 0 and Docker wasn't asked to
+//     keep it running (restart policy "no" or "on-failure"), or it was
+//     started with --rm and is gone. Cron-started backups and CI jobs end
+//     like that. A container with restart policy "always" or
+//     "unless-stopped" must keep running;
+//   - healthy wherever a healthcheck is defined. "starting" is waited for
+//     as long as the healthcheck itself can take (start_period, then
+//     retries × (interval + timeout)), at most MaxHealthWait;
 //   - restart counts don't rise during the window; no new OOM kills;
-//   - published ports that accepted TCP still do;
+//   - published ports that accepted TCP still do. The probe goes to the
+//     container's own address and port where it has one, because the
+//     published port on the host is answered by docker-proxy whenever the
+//     container runs, listening or not;
 //   - ports that answered HTTP answer with the same status class;
-//   - no new failed systemd units (whole-system checks only).
+//   - no new failed systemd units (whole-system checks only);
+//   - Docker answers, if it answered before.
 //
 // Log lines that look bad are notes for the run record, never a reason for red.
 package verify
@@ -36,6 +47,57 @@ type Container struct {
 	RestartCount int             `json:"restart_count"`
 	OOMKilled    bool            `json:"oom_killed,omitempty"`
 	Ports        []protocol.Port `json:"ports,omitempty"`
+	// RestartPolicy is Docker's restart policy name ("no" when unset).
+	RestartPolicy string `json:"restart_policy,omitempty"`
+	AutoRemove    bool   `json:"auto_remove,omitempty"` // started with --rm
+	ExitCode      int    `json:"exit_code,omitempty"`
+	// HealthWait is how long the healthcheck can stay "starting" before it
+	// must report (0: no healthcheck config known, StartCap applies).
+	HealthWait time.Duration `json:"health_wait,omitempty"`
+	// HealthFirst is the earliest a first health result can arrive.
+	HealthFirst time.Duration `json:"health_first,omitempty"`
+}
+
+// MaxHealthWait is the longest the check waits for a healthcheck that is
+// still starting.
+const MaxHealthWait = 10 * time.Minute
+
+// HealthTimes works out HealthWait and HealthFirst from a healthcheck's
+// settings, with Docker's defaults for zero values (interval 30 s, timeout
+// 30 s, 3 retries, start interval 5 s).
+func HealthTimes(interval, timeout, startPeriod, startInterval time.Duration, retries int) (wait, first time.Duration) {
+	if interval <= 0 {
+		interval = 30 * time.Second
+	}
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
+	if retries <= 0 {
+		retries = 3
+	}
+	if startInterval <= 0 {
+		startInterval = 5 * time.Second
+	}
+	first = interval
+	if startPeriod > 0 && startInterval < interval {
+		first = startInterval // probes run every start interval during the start period
+	}
+	wait = startPeriod + time.Duration(retries)*(interval+timeout) + 30*time.Second
+	return wait, first
+}
+
+// finished reports whether a container ended on its own and cleanly.
+func (c Container) finished() bool {
+	return c.State == "exited" && c.ExitCode == 0 && c.mayStop()
+}
+
+// mayStop: Docker wasn't asked to keep it running.
+func (c Container) mayStop() bool {
+	switch c.RestartPolicy {
+	case "", "no", "on-failure":
+		return true
+	}
+	return false
 }
 
 // Key is project/service.
@@ -101,6 +163,12 @@ type Result struct {
 	Reasons []string `json:"reasons,omitempty"` // why it's red
 	Notes   []string `json:"notes,omitempty"`   // log lines worth a look
 	Running int      `json:"running"`           // containers running at the end (in scope)
+	// Interrupted: the check was cut short (the agent is stopping), so it
+	// says nothing either way.
+	Interrupted bool `json:"interrupted,omitempty"`
+	// OnlyStarting: red only because a healthcheck was still starting
+	// after the full wait.
+	OnlyStarting bool `json:"only_starting,omitempty"`
 }
 
 func (c *Checker) now() time.Time {
@@ -138,6 +206,22 @@ func (c *Checker) startCap() time.Duration {
 	return 3 * time.Minute
 }
 
+// healthWait is how long a container may stay "starting".
+func (c *Checker) healthWait(ct Container) time.Duration {
+	if ct.HealthWait <= 0 {
+		return c.startCap()
+	}
+	return min(ct.HealthWait, MaxHealthWait)
+}
+
+func (c *Checker) longestWait(inv Inventory) time.Duration {
+	d := c.startCap()
+	for _, ct := range inv.Containers {
+		d = max(d, c.healthWait(ct))
+	}
+	return d
+}
+
 // Snapshot takes one inventory.
 func (c *Checker) Snapshot(ctx context.Context, projects []string) Inventory {
 	inv := c.Source.Snapshot(ctx, projects)
@@ -153,10 +237,12 @@ func (c *Checker) Snapshot(ctx context.Context, projects []string) Inventory {
 func (c *Checker) Verify(ctx context.Context, before Inventory, projects []string, window time.Duration) Result {
 	start := c.now()
 	deadline := start.Add(window)
-	hardDeadline := start.Add(max(window, c.startCap()))
 	before = scope(before, projects)
 	base := map[string]int{} // container ID → restart count when first seen
 	var last Inventory
+	interrupted := func() Result {
+		return c.finish(ctx, Result{Interrupted: true, Reasons: []string{"The check was interrupted before it finished."}}, last, start)
+	}
 	for {
 		last = scope(c.Snapshot(ctx, projects), projects)
 		for _, ct := range last.Containers {
@@ -165,33 +251,34 @@ func (c *Checker) Verify(ctx context.Context, before Inventory, projects []strin
 			}
 		}
 		elapsed := c.now().Sub(start)
-		hard, pending := evaluate(before, last, base, projects == nil, false, elapsed >= c.startCap())
-		if len(hard) > 0 {
-			return c.finish(ctx, Result{Reasons: hard}, last, start)
+		ev := c.evaluate(before, last, base, projects == nil, false, elapsed)
+		if len(ev.hard) > 0 {
+			return c.finish(ctx, Result{Reasons: ev.hard, OnlyStarting: ev.onlyStarting}, last, start)
 		}
-		if (!c.now().Before(deadline) && !pending) || !c.now().Before(hardDeadline) {
+		hardDeadline := start.Add(max(window, c.longestWait(last)))
+		if (!c.now().Before(deadline) && !ev.pending) || !c.now().Before(hardDeadline) {
 			break
 		}
 		if !c.sleep(ctx, c.poll()) {
-			return c.finish(ctx, Result{Reasons: []string{"The check was interrupted before it finished."}}, last, start)
+			return interrupted()
 		}
 	}
 	// Final comparison, including ports and units. Ports get two more
 	// chances a poll apart, so one slow answer isn't a failure.
-	var reasons []string
+	var ev evaluation
 	for attempt := 0; attempt < 3; attempt++ {
 		if attempt > 0 {
 			if !c.sleep(ctx, c.poll()) {
-				break
+				return interrupted()
 			}
 			last = scope(c.Snapshot(ctx, projects), projects)
 		}
-		reasons, _ = evaluate(before, last, base, projects == nil, true, true)
-		if len(reasons) == 0 {
+		ev = c.evaluate(before, last, base, projects == nil, true, MaxHealthWait+time.Hour)
+		if len(ev.hard) == 0 {
 			break
 		}
 	}
-	return c.finish(ctx, Result{Green: len(reasons) == 0, Reasons: reasons}, last, start)
+	return c.finish(ctx, Result{Green: len(ev.hard) == 0, Reasons: ev.hard, OnlyStarting: ev.onlyStarting}, last, start)
 }
 
 func (c *Checker) finish(ctx context.Context, r Result, last Inventory, start time.Time) Result {
@@ -262,16 +349,47 @@ func displayName(key string) string {
 	return key
 }
 
-// evaluate returns hard reasons (red now) and whether something is still
-// settling (worth waiting for).
-func evaluate(before, now Inventory, base map[string]int, system, final, capReached bool) ([]string, bool) {
-	var hard []string
-	pending := false
-	if !now.DockerOK {
-		if final {
-			hard = append(hard, "Docker isn't answering: "+now.DockerErr)
+type evaluation struct {
+	hard         []string // red now
+	pending      bool     // something is still settling (worth waiting for)
+	onlyStarting bool     // every hard reason is a healthcheck still starting
+}
+
+// stoppedOK counts, for one group, the containers that were running
+// before and have since finished on their own (see the package comment),
+// and how many of the before-running containers had to keep running.
+func stoppedOK(b, n *group, now Inventory) (finished, mustRun int) {
+	ids := map[string]bool{}
+	for _, ct := range now.Containers {
+		ids[ct.ID] = true
+	}
+	for _, ct := range b.containers {
+		if ct.State != "running" {
+			continue
 		}
-		return hard, true
+		if !ct.mayStop() {
+			mustRun++
+		} else if ct.AutoRemove && !ids[ct.ID] {
+			finished++ // --rm: gone once it's done
+		}
+	}
+	for _, ct := range n.containers {
+		if ct.finished() {
+			finished++
+		}
+	}
+	return finished, mustRun
+}
+
+func (c *Checker) evaluate(before, now Inventory, base map[string]int, system, final bool, elapsed time.Duration) evaluation {
+	var ev evaluation
+	starting := 0
+	if !now.DockerOK {
+		if final && before.DockerOK {
+			ev.hard = append(ev.hard, "Docker isn't answering: "+now.DockerErr)
+		}
+		ev.pending = before.DockerOK
+		return ev
 	}
 	bg, keys := groups(before)
 	ng, _ := groups(now)
@@ -286,40 +404,44 @@ func evaluate(before, now Inventory, base map[string]int, system, final, capReac
 			continue // wasn't fine before the run; nothing to compare
 		}
 		if b.running > 0 && n.running < b.running {
-			if final {
-				if b.running == 1 {
-					hard = append(hard, fmt.Sprintf("%s isn't running (it was before the run).", name))
+			finished, mustRun := stoppedOK(b, n, now)
+			if n.running < mustRun || b.running-n.running > finished {
+				if final {
+					if b.running == 1 {
+						ev.hard = append(ev.hard, fmt.Sprintf("%s isn't running (it was before the run).", name))
+					} else {
+						ev.hard = append(ev.hard, fmt.Sprintf("%s has %d of %d containers running.", name, n.running, b.running))
+					}
 				} else {
-					hard = append(hard, fmt.Sprintf("%s has %d of %d containers running.", name, n.running, b.running))
+					ev.pending = true
 				}
-			} else {
-				pending = true
 			}
 		}
 		if n.unhealthy > 0 && b.unhealthy == 0 {
-			hard = append(hard, fmt.Sprintf("%s reports unhealthy.", name))
+			ev.hard = append(ev.hard, fmt.Sprintf("%s reports unhealthy.", name))
 		}
 		for _, ct := range n.containers {
 			if ct.State == "running" && ct.Health == "starting" {
-				if capReached {
-					hard = append(hard, fmt.Sprintf("%s is still starting after the full wait.", name))
+				if elapsed >= c.healthWait(ct) {
+					ev.hard = append(ev.hard, fmt.Sprintf("%s is still starting after the full wait (%s).", name, c.healthWait(ct).Round(time.Second)))
+					starting++
 				} else {
-					pending = true
+					ev.pending = true
 				}
 				break
 			}
 		}
 		for _, ct := range n.containers {
 			if r, ok := base[ct.ID]; ok && ct.RestartCount > r {
-				hard = append(hard, fmt.Sprintf("%s restarted %d times during the check.", name, ct.RestartCount-r))
+				ev.hard = append(ev.hard, fmt.Sprintf("%s restarted %d times during the check.", name, ct.RestartCount-r))
 				break
 			}
 		}
 		if n.oom && !b.oom {
-			hard = append(hard, fmt.Sprintf("%s was killed for running out of memory.", name))
+			ev.hard = append(ev.hard, fmt.Sprintf("%s was killed for running out of memory.", name))
 		}
 		if final {
-			hard = append(hard, portReasons(name, b, n)...)
+			ev.hard = append(ev.hard, portReasons(name, b, n)...)
 		}
 	}
 	if system && final && before.UnitsOK && now.UnitsOK {
@@ -330,12 +452,13 @@ func evaluate(before, now Inventory, base map[string]int, system, final, capReac
 			}
 		}
 		if len(added) == 1 {
-			hard = append(hard, fmt.Sprintf("The systemd unit %s failed.", added[0]))
+			ev.hard = append(ev.hard, fmt.Sprintf("The systemd unit %s failed.", added[0]))
 		} else if len(added) > 1 {
-			hard = append(hard, fmt.Sprintf("These systemd units failed: %s.", strings.Join(added, ", ")))
+			ev.hard = append(ev.hard, fmt.Sprintf("These systemd units failed: %s.", strings.Join(added, ", ")))
 		}
 	}
-	return hard, pending
+	ev.onlyStarting = len(ev.hard) > 0 && starting == len(ev.hard)
+	return ev
 }
 
 func portReasons(name string, b, n *group) []string {

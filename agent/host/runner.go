@@ -24,10 +24,12 @@ type Runner interface {
 // showhold and systemctl list-units only read; the Compose plugin is only
 // asked for its version.
 //
-// From M1 there are three write commands, each with one exact argument shape
+// From M1 there are these write commands, each with one exact argument shape
 // (see writes.go): `apt-get update`, `apt-get … install --only-upgrade
-// pkg=version…` and `docker compose … up … <services>`. Only agent/run may
-// build them (a source-scan test enforces it).
+// pkg=version…`, `docker compose … up … <services>`, and `systemctl
+// stop|start` of the two apt timers. Only agent/run may build them (a
+// source-scan test enforces it). `docker compose … config` and `systemctl
+// is-active` of those timers are read-only.
 var (
 	// AptNoCache makes apt build its package cache in memory instead of
 	// writing /var/cache/apt/*.bin.
@@ -68,7 +70,9 @@ func Allowed(name string, args []string) error {
 	case "apt-get":
 		ok = slices.Equal(args, AptSimulateUpgrade) || aptWriteAllowed(args)
 	case "docker":
-		_, ok = ParseComposeUp(args)
+		_, up := ParseComposeUp(args)
+		_, cfg := ParseComposeConfig(args)
+		ok = up || cfg
 	case "apt-mark":
 		ok = slices.Equal(args, []string{"showhold"})
 	case "apt-cache":
@@ -78,7 +82,8 @@ func Allowed(name string, args []string) error {
 	case "dpkg-query":
 		ok = len(args) > 2 && args[0] == "-W" && args[1] == DpkgQueryFormat && allMatch(args[2:], pkgPatternRe)
 	case "systemctl":
-		ok = slices.Equal(args, SystemctlFailed)
+		ok = slices.Equal(args, SystemctlFailed) || systemctlWriteAllowed(args) ||
+			(len(args) == 2 && args[0] == "is-active" && slices.Contains(AptTimers, args[1]))
 	default:
 		ok = slices.Contains(ComposePluginPaths, name) && slices.Equal(args, []string{"version", "--short"})
 	}
@@ -121,9 +126,22 @@ var Env = []string{
 	"HOME=/var/lib/upkeeper",
 }
 
-func (ExecRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
+// StderrRunner is implemented by runners that can also return a command's
+// stderr when it succeeds (Compose prints warnings there, such as a
+// variable that isn't set).
+type StderrRunner interface {
+	RunStderr(ctx context.Context, name string, args ...string) (stdout, stderr []byte, err error)
+}
+
+func (r ExecRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
+	out, _, err := r.RunStderr(ctx, name, args...)
+	return out, err
+}
+
+// RunStderr is Run, also returning stderr.
+func (ExecRunner) RunStderr(ctx context.Context, name string, args ...string) ([]byte, []byte, error) {
 	if err := Allowed(name, args); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	bin := name
 	if !filepath.IsAbs(bin) {
@@ -136,7 +154,7 @@ func (ExecRunner) Run(ctx context.Context, name string, args ...string) ([]byte,
 			}
 		}
 		if bin == "" {
-			return nil, fmt.Errorf("%s: %w", name, exec.ErrNotFound)
+			return nil, nil, fmt.Errorf("%s: %w", name, exec.ErrNotFound)
 		}
 	}
 	cmd := exec.CommandContext(ctx, bin, args...)
@@ -157,5 +175,5 @@ func (ExecRunner) Run(ctx context.Context, name string, args ...string) ([]byte,
 			err = fmt.Errorf("%s: %w", name, err)
 		}
 	}
-	return stdout.Bytes(), err
+	return stdout.Bytes(), stderr.Bytes(), err
 }

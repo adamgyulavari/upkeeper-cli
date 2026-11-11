@@ -199,7 +199,9 @@ const (
 // Risk is something about the server that makes updating harder or riskier.
 // Codes are stable identifiers: compose_v1, unattended_upgrades_conflict,
 // no_restart_policy, docker_eol, os_unsupported, disk_low, reboot_pending,
-// failed_units, floating_tag, coolify_host, image_compose_labels.
+// failed_units, floating_tag, coolify_host, image_compose_labels,
+// compose_mismatch (from protocol 2: a run found that a project's compose
+// files, with the agent's environment, don't reproduce what's running).
 type Risk struct {
 	Code     string   `json:"code"`
 	Severity Severity `json:"severity"`

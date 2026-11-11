@@ -107,6 +107,9 @@ func (r *runner) summary() string {
 			} else {
 				parts = append(parts, fmt.Sprintf("%s %s didn't come back healthy, so %s is running again.", u.name, to, from))
 			}
+			if u.data {
+				parts = append(parts, fmt.Sprintf("The new version ran on %s's data for a few minutes; any changes it made to that data stay.", u.name))
+			}
 		}
 		rest := "Nothing else changed."
 		if c := changesPhrase(res.Applied); c != "" {

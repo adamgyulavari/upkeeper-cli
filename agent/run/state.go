@@ -17,6 +17,9 @@ type State struct {
 	Step      string          `json:"step"`
 	Applied   []protocol.Item `json:"applied"`
 	Changes   []Change        `json:"changes,omitempty"` // image changes not yet verified
+	// PausedTimers are apt timers the run stopped; they're started again at
+	// the end, or by Recover after a crash.
+	PausedTimers []string `json:"paused_timers,omitempty"`
 }
 
 // Change is one image change, with what's needed to put it back.
@@ -25,12 +28,20 @@ type Change struct {
 	Project    string        `json:"project"`
 	Service    string        `json:"service"`
 	Floating   bool          `json:"floating"`
-	Repo       string        `json:"repo"`          // image name as written, without tag
-	Tag        string        `json:"tag"`           // floating tag
-	OldImageID string        `json:"old_image_id"`  // floating: image to tag back
-	OldEntry   string        `json:"old_entry"`     // version: previous override entry ("" = none)
-	NewImage   string        `json:"new_image"`     // what we pulled
-	Override   string        `json:"override_path"` // version: the override file
+	Repo       string        `json:"repo"`         // image name as written, without tag
+	Tag        string        `json:"tag"`          // floating tag
+	OldImageID string        `json:"old_image_id"` // image that ran before
+	OldImage   string        `json:"old_image"`    // the container's image reference before (Config.Image)
+	OldHash    string        `json:"old_config_hash"`
+	OldEntry   string        `json:"old_entry"` // version: previous override entry
+	HadEntry   bool          `json:"had_entry"` // version: the override had an entry before
+	NewImage   string        `json:"new_image"` // what we pulled (repo@digest)
+	NewImageID string        `json:"new_image_id,omitempty"`
+	// ExpectedHash is the config hash Compose said the service will have
+	// after the update; the new container must carry exactly this one.
+	ExpectedHash string `json:"expected_config_hash,omitempty"`
+	Override     string `json:"override_path"`
+	Data         bool   `json:"data,omitempty"` // the service has writable volumes or bind mounts
 }
 
 func saveState(path string, s State) error { return statefile.WriteJSON(path, s) }

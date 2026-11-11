@@ -109,20 +109,44 @@ type ContainerInspect struct {
 	State        struct {
 		Status    string `json:"Status"`
 		OOMKilled bool   `json:"OOMKilled"`
+		ExitCode  int    `json:"ExitCode"`
 		Health    *struct {
 			Status string `json:"Status"`
 		} `json:"Health"`
 	} `json:"State"`
 	Config struct {
-		Image  string            `json:"Image"`
-		Labels map[string]string `json:"Labels"`
+		Image       string            `json:"Image"`
+		Labels      map[string]string `json:"Labels"`
+		Healthcheck *Healthcheck      `json:"Healthcheck"`
 	} `json:"Config"`
 	HostConfig struct {
+		AutoRemove    bool `json:"AutoRemove"`
 		RestartPolicy struct {
 			Name string `json:"Name"`
 		} `json:"RestartPolicy"`
 	} `json:"HostConfig"`
+	NetworkSettings struct {
+		Networks map[string]struct {
+			IPAddress string `json:"IPAddress"`
+		} `json:"Networks"`
+	} `json:"NetworkSettings"`
 	Mounts []Mount `json:"Mounts"`
+}
+
+// Healthcheck is a container's healthcheck config. Durations are in
+// nanoseconds; zero means Docker's default.
+type Healthcheck struct {
+	Test          []string      `json:"Test"`
+	Interval      time.Duration `json:"Interval"`
+	Timeout       time.Duration `json:"Timeout"`
+	StartPeriod   time.Duration `json:"StartPeriod"`
+	StartInterval time.Duration `json:"StartInterval"`
+	Retries       int           `json:"Retries"`
+}
+
+// Disabled reports whether the healthcheck is switched off (NONE) or empty.
+func (h *Healthcheck) Disabled() bool {
+	return h == nil || len(h.Test) == 0 || h.Test[0] == "NONE"
 }
 
 func (c *Client) Inspect(ctx context.Context, id string) (ContainerInspect, error) {
