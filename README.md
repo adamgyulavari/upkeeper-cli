@@ -1,12 +1,12 @@
 # upkeeper
 
-The open-source server agent for [upkeeper.sh](https://upkeeper.sh): it keeps an Ubuntu/Debian Docker host up to date, covering OS packages, the kernel, Docker Engine and container images.
+The open-source server agent for [upkeeper.sh](https://upkeeper.sh): it keeps an Ubuntu/Debian Docker host up to date. This version (M1) updates OS packages and container images; it reports, but doesn't apply, Docker Engine updates and reboots.
 
 > **About this project.** I built upkeeper for my own servers, and most of the code was written with AI coding agents, with reviews and tests along the way. I'm opening it up because it may be useful to others. It runs as root, so read the code before you install it, and don't take my word for anything you can check.
 >
 > **Status: early, not announced anywhere.** The hosted service isn't open for sign-ups yet.
 >
-> **Status: M1.** The agent reports what's out of date and, when you allow it, applies OS updates and image updates it can undo. It starts in **observe** mode, which only reports, as in M0. Docker Engine updates and reboots come in M2.
+> **This version (M1).** The agent reports what's out of date and, when you allow it on the server and in the dashboard, applies OS package updates and container image updates. An image update that doesn't come back healthy is put back automatically; OS updates can't be undone, so the agent checks the server after them and stops if something looks wrong. It starts in **observe** mode, which only reports, as v0.1.0 did. Docker Engine updates and reboots are not done by this version. Updates that need a person (major versions, for example) are reported and left to you.
 
 ## Install
 
@@ -26,6 +26,22 @@ Read [`deploy/install.sh`](deploy/install.sh) before running it. To try the agen
 ```sh
 upkeeper report --print --offline   # collect once, print JSON, send nothing
 ```
+
+## Upgrading from v0.1.0
+
+Run the install line again, without a token:
+
+```sh
+curl --proto '=https' --tlsv1.2 -fsSL https://upkeeper.sh | sh
+```
+
+What changes:
+
+- `/usr/local/bin/upkeeper` is replaced by the new version, after the same signature and checksum checks as a new install.
+- The systemd unit is replaced. The v0.1.0 unit had a strict read-only sandbox; the new one has none, because apt runs under it (see Security). Drop-ins in `/etc/systemd/system/upkeeper.service.d/` are kept; if you want the old sandbox on a server that stays in observe mode, add the drop-in shown there.
+- `/etc/upkeeper/policy.yaml` is created with `mode: observe` if it doesn't exist. v0.1.0 didn't have one, so after the upgrade the server still only reports. Nothing changes on it until you set the policy and switch on automatic runs in the dashboard.
+- `/etc/upkeeper/agent.json` is kept, so the server stays enrolled.
+- The service is restarted. If a run is in progress, the installer stops without changing anything; run it again later.
 
 ## Turning on automatic runs
 
@@ -55,28 +71,47 @@ The dashboard can never allow more than the local policy. Even in `auto`, the ag
 
 | Step | What happens |
 |---|---|
-| Pre-flight | No dpkg lock, at least 2 GB free on `/` and `/var/lib/docker`, Docker answers. Records every container's state, health, restart count and ports |
-| Plan | Looks for updates again. An item is applied only if the job approved it, the agent's own classifier still rates it **auto**, and the policy allows it |
-| OS | `apt-get update`, a simulation of the exact install, then `apt-get install --only-upgrade pkg=version…`. Only packages from the distribution's own archive; never Docker packages or held packages. A new kernel is installed but not booted |
-| Images | Pulled by the digest seen when planning, then one service at a time is recreated with `docker compose up` and the project is watched for 3 minutes. If it doesn't come back healthy, the previous image is put back (L1) |
+| Pre-flight | At least 2 GB free on `/` and `/var/lib/docker`; Docker answers if it's installed (otherwise the run is refused and nothing changes). Records every container's state, health, restart policy, restart count and ports |
+| Plan | Looks for updates again. An item is applied only if the job approved it, the agent's own classifier still rates it **auto**, and the policy allows it. An image that was put back in an earlier run isn't tried again until a newer one is published |
+| OS | Pauses the `apt-daily` and `apt-daily-upgrade` timers if they're active (started again at the end), runs `apt-get update` (one retry after 90 seconds), simulates the exact install, then `apt-get install --only-upgrade pkg=version…`, waiting up to two minutes for apt's lock. Only packages from the distribution's own archive; never Docker packages or held packages. Afterwards it reads the installed versions back with `dpkg-query`. A new kernel is installed but not booted, and running services keep old library versions until they restart: this version restarts nothing |
+| Images | Per Compose project, per service: checks that the project's files still describe what's running (below), pulls the new image by the digest seen when planning, recreates the one service with `docker compose up --no-deps`, checks that it got exactly the expected configuration and image, and watches the project. If it doesn't come back healthy, the previous image is put back (L1) |
 | Verify | The whole server is compared with the pre-flight state |
 | Keep | Old images stay, so they can be put back |
 
-Anything unexpected (an apt error, a project that stays unhealthy after L1, a run cut off by a crash) stops the run and **freezes** the server: no more runs until you check it and run `sudo upkeeper unfreeze`. OS updates can't be undone automatically, so the agent stops and says what happened.
+**When the server is frozen.** If something changed and couldn't be checked or put back (an apt error after dpkg started, a project still unhealthy after L1, a run cut off by a crash or a stop of the agent), the run stops and **freezes** the server: no more runs until you check it and run `sudo upkeeper unfreeze`. A failure before anything changed (apt busy, `apt-get update` failing, a download failing) only skips those updates; the next run tries again.
 
-**Version updates and your compose files.** The agent never edits your compose files. A new version tag goes into `compose.override.upkeeper.yml` next to your first compose file, and the agent adds it with `-f` when it runs compose. If you run `docker compose up` yourself without that file, the old tag comes back: copy the tag into your compose file to make it permanent, and remove the entry from the override.
+**The health check** is generic: it compares the server with the state recorded at pre-flight, and knows nothing about your apps.
 
-What stays out of automatic runs (and waits for a supervised run): major versions, minor versions of services that keep database data, images younger than 3 days, packages from third-party apt sources, anything Coolify manages, containers whose image sets Docker Compose labels itself, and projects whose compose files aren't owned by root or sit inside a container's mount.
+- Every container that was running is running. A container that finished on its own doesn't count against this: one that exited with code 0 and whose restart policy is `no` or `on-failure`, or one started with `--rm` that is gone (a cron-started backup, a CI job). A container with restart policy `always` or `unless-stopped` must keep running.
+- Containers with a healthcheck are healthy. "starting" is waited for as long as the healthcheck can take (its start period, then retries × (interval + timeout)), at most 10 minutes; a project whose healthcheck can't report within 10 minutes is skipped.
+- Restart counts don't rise during the check; no new out-of-memory kills.
+- Published TCP ports that accepted connections still do, and ports that answered HTTP answer with the same status class. The probe connects to the container's own address and port, because on the host side Docker's proxy accepts connections whenever the container runs, listening or not. Containers without their own address (host networking) are probed on the host port, which only shows that something accepts there.
+- No new failed systemd units; Docker still answers if it answered before.
+
+Log lines that look bad are notes in the run record; they never decide the check.
+
+**Image updates and your compose files.** The agent never edits your compose files. Before touching a project it asks Compose for each service's configuration hash (`docker compose config --hash`, with the same files and project directory, and the agent's own environment) and requires it to equal the hash on the running containers. So a run only ever changes the image. A project is skipped, with the reason in the run record and a `compose_mismatch` risk in the report, when:
+
+- its compose files were changed after the last `docker compose up` (run `docker compose up -d` yourself first);
+- it uses variables that aren't set for the agent (from your shell or a script; put them in the project's `.env` file);
+- it runs a different number of containers than its files ask for (started with `--scale`);
+- its compose files use `include:` or `extends:`.
+
+A new version tag goes into `compose.override.upkeeper.yml` next to your first compose file, and the agent adds it with `-f` when it runs compose. If you run `docker compose up` yourself without that file, the old tag comes back and the agent then skips the project until the files and the running service agree again: run compose with `-f compose.override.upkeeper.yml` after your own files, or copy the tag into your compose file and remove the entry from the override.
+
+**About undo.** Putting an image back restores the container, not your data. If the new version changed data in a volume or bind mount while it ran (a migration on start, for example), that change stays. That's why, for services that write data on the host, only patch releases are automatic.
+
+**What stays out of automatic runs** (reported, and left to you): major versions; minor versions of services that write data on the host (label a service `upkeeper.policy=auto-minor` to allow them; database images stay out regardless), and floating tags like `latest` on those services; images this agent first saw less than 3 days ago; packages from third-party apt sources; anything Coolify manages; services that weren't running when the run started (the agent never starts a stopped service or a finished job); containers whose image sets Docker Compose labels itself; projects whose compose files aren't owned by root, are writable by group or others, or sit inside a container's mount (in practice, projects under `/opt`, `/srv` or `/root` work, and projects in a user's home directory don't). Labels `upkeeper.policy=pin` and `upkeeper.policy=supervised` keep a service out entirely.
 
 ## Security
 
 **Connection.** Outbound HTTPS only, to the control plane. No inbound ports, no SSH, no cloud provider keys.
 
-**No arbitrary commands.** Every command the agent can run is in a fixed allowlist with exact argument shapes ([`agent/host`](agent/host)); a source-scan test fails the build if write code appears outside [`agent/run`](agent/run). There is no shell: every argument is passed as a separate value and must match the allowed shape (package names and versions, absolute paths, service names). The write commands are `apt-get update`, `apt-get install --only-upgrade pkg=version…`, and `docker compose … up -d --no-deps --pull never <services>`, plus two Docker Engine API calls (pull by digest, tag).
+**No arbitrary commands.** Every command the agent can run is in a fixed allowlist with exact argument shapes ([`agent/host`](agent/host)); a source-scan test fails the build if write code appears outside [`agent/run`](agent/run). There is no shell: every argument is passed as a separate value and must match the allowed shape (package names and versions, absolute paths, service names). The write commands are `apt-get update`, `apt-get install --only-upgrade pkg=version…`, `docker compose … up -d --no-deps --no-build --force-recreate --pull never <service>`, and `systemctl stop|start` of exactly `apt-daily.timer` and `apt-daily-upgrade.timer`, plus two Docker Engine API calls (pull by digest, tag). `docker compose … config --hash|--format json` and `systemctl is-active` of those two timers only read.
 
 **Signed jobs.** Jobs are signed by an online key whose certificate is signed by an offline root key compiled into the binary (`make build ROOT_KEYS=…`). Nothing is pinned from the network. A build without a root key accepts no jobs. Development builds (`make build-dev`) also trust a TEST root whose private key is public; never run one on a server you care about.
 
-**Files from containers aren't trusted.** Docker labels can come from an image, so compose paths from labels are used only after checking ownership, permissions, symlinks and container mounts, and the files must not change between the check and `compose up`.
+**Files from containers aren't trusted.** Docker labels can come from an image, so compose paths from labels are used only after checking ownership, permissions, symlinks and container mounts; projects whose compose files use `include:` or `extends:` are skipped, because those pull in files the agent doesn't check. The files must not change between the check and `compose up`, and the configuration hash check above makes sure `compose up` reproduces what was already running, apart from the image.
 
 **The systemd unit.** In M0 the unit had a strict read-only sandbox. M1 upgrades packages, and apt, dpkg and their maintainer scripts run as children of the agent's service. Those scripts write `/usr`, `/etc`, `/boot` and `/var`, set setuid bits, open block devices (`update-grub`, `grub-probe`, `blkid` in initramfs hooks), load kernel modules, build DKMS modules and compress initramfs images, which can take more than a gigabyte of memory. Any sandbox setting is inherited by them: `ProtectClock` or `PrivateDevices` closes the device list, `MemoryMax` lets the kernel kill a postinst halfway, `ProtectHome` blocks the override file under `/root` or `/home`, and a syscall filter kills foreign-architecture scripts.
 
@@ -104,11 +139,13 @@ MemoryDenyWriteExecute=yes
 UMask=0077
 ```
 
-then `sudo systemctl daemon-reload && sudo systemctl restart upkeeper`. With it, any run fails at its first write and freezes the server, which is what you want there.
+then `sudo systemctl daemon-reload && sudo systemctl restart upkeeper`. Keep that server's policy at `observe`: with this sandbox apt can't work, and the override file can't be written under `/root` or `/home`.
 
 ## Supported
 
 Ubuntu 22.04 / 24.04, Debian 12 / 13, `docker-ce` or `docker.io`, Compose v2 (2.20 or newer for image updates). On Coolify hosts, Coolify keeps managing its containers; the agent only looks after the host.
+
+Other releases, Ubuntu 26.04 among them, aren't supported yet: the agent reports on them but refuses automatic runs, and says so in the report. Supporting a release means checking apt's output and its maintainer scripts there first, which hasn't been done for 26.04.
 
 ## Uninstall
 
