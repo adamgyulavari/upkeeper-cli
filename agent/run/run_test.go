@@ -66,6 +66,7 @@ func setup(t *testing.T) *env {
 		Trust:     run.PathChecker{OwnerUID: uid, Root: w.Root},
 		StatePath: filepath.Join(root, "state", "run.json"),
 		Now:       clock.Now,
+		Sleep:     clock.Sleep,
 	}
 	return ev
 }
@@ -140,12 +141,14 @@ func TestAutoRunAppliesAndVerifies(t *testing.T) {
 		t.Errorf("web runs %s", c.ImageID)
 	}
 	ov, ok, err := run.ReadOverride(filepath.Join(ev.w.Root, "app", run.OverrideName))
-	if !ok || err != nil || ov["redis"] != "redis:7.4.2@"+dgNew || len(ov) != 1 {
+	if !ok || err != nil || ov["redis"] != "redis:7.4.2" || len(ov) != 1 {
 		t.Errorf("override %v %v %v", ov, ok, err)
 	}
-	want := []string{"apt-get update", "apt-get install openssl=3.0.13-0ubuntu3.5",
+	want := []string{"systemctl stop apt-daily.timer", "systemctl stop apt-daily-upgrade.timer",
+		"apt-get update", "apt-get install openssl=3.0.13-0ubuntu3.5",
 		"pull redis@" + dgNew, "tag sha256:redis-7.4.2 redis:7.4.2", "compose up app redis files=2",
-		"pull nginx@" + dgLatst, "tag sha256:nginx-new nginx:latest", "compose up app web files=2"}
+		"pull nginx@" + dgLatst, "tag sha256:nginx-new nginx:latest", "compose up app web files=2",
+		"systemctl start apt-daily.timer", "systemctl start apt-daily-upgrade.timer"}
 	if !slices.Equal(ev.w.Calls, want) {
 		t.Errorf("calls\n got %v\nwant %v", ev.w.Calls, want)
 	}
@@ -233,6 +236,7 @@ func TestAptFailureStopsAndFreezes(t *testing.T) {
 	ev := setup(t)
 	key := ev.versionBump()
 	ev.w.AptInstallErr = errors.New("apt-get: exit status 100: E: Sub-process /usr/bin/dpkg returned an error code (1)")
+	ev.w.AptInstallChanges = true
 	res := ev.run(ev.job(protocol.ModeAuto, opensslKey, key))
 	if res.Outcome != protocol.OutcomeStopped || !res.Frozen || len(res.Applied) != 0 {
 		t.Fatalf("result %+v", res)
@@ -257,30 +261,58 @@ func TestAptFailureStopsAndFreezes(t *testing.T) {
 	checkVoice(t, ev, res)
 }
 
-func TestAptUpdateFailureFreezes(t *testing.T) {
+// An apt failure that changed nothing skips the OS items and freezes nothing.
+func TestAptUpdateFailureSkipsWithoutFreezing(t *testing.T) {
 	ev := setup(t)
-	ev.w.AptUpdateErr = errors.New("apt-get: exit status 100")
-	res := ev.run(ev.job(protocol.ModeAuto, opensslKey))
-	if res.Outcome != protocol.OutcomeStopped || !res.Frozen {
+	key := ev.versionBump()
+	ev.w.AptUpdateErr = errors.New("apt-get: exit status 100: E: Could not get lock /var/lib/apt/lists/lock")
+	res := ev.run(ev.job(protocol.ModeAuto, opensslKey, key))
+	if res.Outcome != protocol.OutcomePartial || res.Frozen || ev.pol.Frozen().Frozen || len(res.Applied) != 1 {
 		t.Fatalf("%+v", res)
+	}
+	updates := 0
+	for _, c := range ev.w.Calls {
+		if c == "apt-get update" {
+			updates++
+		}
+	}
+	if updates != 2 {
+		t.Errorf("apt-get update tried %d times, want 2 (one retry): %v", updates, ev.w.Calls)
+	}
+	if !strings.Contains(res.Skipped[0].Reason, "No packages were installed") {
+		t.Errorf("%+v", res.Skipped)
+	}
+	if !ev.w.Timers["apt-daily.timer"] || !ev.w.Timers["apt-daily-upgrade.timer"] {
+		t.Errorf("timers not restored: %v", ev.w.Timers)
 	}
 }
 
-func TestDpkgLockRejectsWithoutChanges(t *testing.T) {
+func TestAptInstallLockClashSkips(t *testing.T) {
 	ev := setup(t)
-	ev.versionBump()
+	ev.w.AptInstallErr = errors.New("apt-get: exit status 100: E: Unable to acquire the dpkg frontend lock (/var/lib/dpkg/lock-frontend), is another process using it?")
+	res := ev.run(ev.job(protocol.ModeAuto, opensslKey))
+	if res.Outcome != protocol.OutcomePartial || res.Frozen || ev.pol.Frozen().Frozen {
+		t.Fatalf("%+v", res)
+	}
+	if !strings.Contains(res.Skipped[0].Reason, "kept apt busy") {
+		t.Errorf("%+v", res.Skipped)
+	}
+}
+
+func TestDpkgLockAtPreflightDoesntStopImages(t *testing.T) {
+	ev := setup(t)
+	key := ev.versionBump()
 	ev.e.Locked = func() (string, bool, error) { return "/var/lib/dpkg/lock-frontend", true, nil }
-	res := ev.run(ev.job(protocol.ModeAuto, opensslKey, "image|app/redis|7.4.2"))
-	if res.Outcome != protocol.OutcomeRejected || res.Frozen || ev.wrote() || ev.pol.Frozen().Frozen {
+	res := ev.run(ev.job(protocol.ModeAuto, key))
+	if res.Outcome != protocol.OutcomeDone || res.Frozen {
 		t.Fatalf("result %+v calls %v", res, ev.w.Calls)
 	}
-	if !strings.Contains(res.Summary, "lock-frontend is locked") {
-		t.Errorf("summary %q", res.Summary)
+	warned := false
+	for _, e := range ev.events {
+		warned = warned || (e.Status == protocol.StepWarn && strings.Contains(e.Message, "lock-frontend is locked"))
 	}
-	// The rejected run doesn't count against the run limit.
-	ev.e.Locked = func() (string, bool, error) { return "", false, nil }
-	if res := ev.run(ev.job(protocol.ModeAuto, opensslKey)); res.Outcome != protocol.OutcomeDone {
-		t.Errorf("after the lock cleared: %+v", res)
+	if !warned {
+		t.Error("no warning about the lock")
 	}
 }
 

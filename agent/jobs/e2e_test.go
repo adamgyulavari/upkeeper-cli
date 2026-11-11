@@ -121,7 +121,7 @@ func TestEndToEnd(t *testing.T) {
 		t.Errorf("redis: %+v", c)
 	}
 	ov, _, _ := run.ReadOverride(filepath.Join(w.Root, "shop", run.OverrideName))
-	if len(ov) != 1 || ov["redis"] != "redis:7.4.2@"+dgRedis {
+	if len(ov) != 1 || ov["redis"] != "redis:7.4.2" {
 		t.Errorf("override %v", ov)
 	}
 	evs := cloud.RunEvents("job_auto")

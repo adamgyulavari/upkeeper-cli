@@ -50,6 +50,9 @@ type World struct {
 	Apt            []collect.AptUpgrade
 	AptUpdateErr   error
 	AptInstallErr  error
+	// AptInstallChanges: with AptInstallErr, dpkg got halfway (the
+	// packages are left half-configured).
+	AptInstallChanges bool
 	AptGone        map[string]bool // package → planned version vanished after apt-get update
 	AptSimExtra    []string        // extra lines in the install simulation
 	Held           []string
@@ -423,6 +426,13 @@ func (w *World) run(name string, args []string) ([]byte, error) {
 	case name == "apt-get":
 		w.Calls = append(w.Calls, "apt-get install "+strings.Join(args[len(args)-countPinned(args):], " "))
 		if w.AptInstallErr != nil {
+			if w.AptInstallChanges {
+				for _, u := range w.Apt {
+					if slices.Contains(args, u.Package+"="+u.To) {
+						w.Installed[u.Package] = u.To + " half-configured"
+					}
+				}
+			}
 			return nil, w.AptInstallErr
 		}
 		var keep []collect.AptUpgrade
@@ -439,7 +449,11 @@ func (w *World) run(name string, args []string) ([]byte, error) {
 		var out strings.Builder
 		for _, p := range args[2:] {
 			if v := w.installed(p); v != "" {
-				fmt.Fprintf(&out, "%s\t%s\tinstalled\n", p, v)
+				st := "installed"
+				if ver, half, ok := strings.Cut(v, " "); ok {
+					v, st = ver, half
+				}
+				fmt.Fprintf(&out, "%s\t%s\t%s\n", p, v, st)
 			}
 		}
 		return []byte(out.String()), nil

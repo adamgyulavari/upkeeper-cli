@@ -93,11 +93,8 @@ func (c Container) finished() bool {
 
 // mayStop: Docker wasn't asked to keep it running.
 func (c Container) mayStop() bool {
-	switch c.RestartPolicy {
-	case "", "no", "on-failure":
-		return true
-	}
-	return false
+	// "" means unknown (not read from Docker): treat it as must-keep-running.
+	return c.RestartPolicy == "no" || c.RestartPolicy == "on-failure"
 }
 
 // Key is project/service.
