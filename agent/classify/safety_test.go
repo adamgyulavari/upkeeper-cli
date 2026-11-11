@@ -124,7 +124,7 @@ func TestMinReleaseAge(t *testing.T) {
 	in := withService(base(), "traefik:v2.11.2", nil, "", discover.ImageUpdate{FromTag: "v2.11.2", ToTag: "v2.11.14", Change: versions.Patch, FirstSeen: now.Add(-30 * time.Hour)})
 	in.Settings = s
 	items := Items(in)
-	if items[0].Decision != protocol.Auto || items[0].Reason != "Released 1 day ago; waits until it's 3 days old, so a bad release has time to be noticed and pulled." {
+	if items[0].Decision != protocol.Auto || !strings.HasPrefix(items[0].Reason, "First seen by this agent 1 day ago; waits until it has been out for 3 days") {
 		t.Fatalf("%s", dump(items))
 	}
 	u := in.Images[0]
@@ -140,4 +140,37 @@ func TestMinReleaseAge(t *testing.T) {
 		t.Error("unknown first-seen counts as new")
 	}
 	checkVoice(t, items)
+}
+
+// H-07: a service that writes data on the host gets automatic patches only,
+// unless it's labelled upkeeper.policy=auto-minor (databases stay flagged).
+func TestDataMountsLimitAutoToPatches(t *testing.T) {
+	data := []string{"/srv/gitea/data"}
+	cases := []struct {
+		image, policy string
+		up            discover.ImageUpdate
+		want          protocol.Decision
+	}{
+		{"gitea/gitea:1.22.1", "", discover.ImageUpdate{FromTag: "1.22.1", ToTag: "1.22.3", Change: versions.Patch}, protocol.Auto},
+		{"gitea/gitea:1.22.1", "", discover.ImageUpdate{FromTag: "1.22.1", ToTag: "1.23.0", Change: versions.Minor}, protocol.Flagged},
+		{"gitea/gitea:1.22.1", "auto-minor", discover.ImageUpdate{FromTag: "1.22.1", ToTag: "1.23.0", Change: versions.Minor}, protocol.Auto},
+		{"gitea/gitea:latest", "", discover.ImageUpdate{FromTag: "latest", ToTag: "latest", NewDigest: true, FromDigest: "sha256:aa", ToDigest: "sha256:bb"}, protocol.Flagged},
+		{"gitea/gitea:1.22", "", discover.ImageUpdate{FromTag: "1.22", ToTag: "1.22", NewDigest: true, FromDigest: "sha256:aa", ToDigest: "sha256:bb"}, protocol.Auto},
+		{"mariadb:11.4.2", "auto-minor", discover.ImageUpdate{FromTag: "11.4.2", ToTag: "11.5.0", Change: versions.Minor}, protocol.Flagged},
+	}
+	for _, tc := range cases {
+		items := Items(withService(base(), tc.image, data, tc.policy, tc.up))
+		var got protocol.Item
+		for _, it := range items {
+			if it.Layer == protocol.LayerImage {
+				got = it
+			}
+		}
+		if got.Decision != tc.want {
+			t.Errorf("%s %s→%s (%q): %s: %s", tc.image, tc.up.FromTag, tc.up.ToTag, tc.policy, got.Decision, got.Reason)
+		}
+		if got.Decision == protocol.Auto && !strings.Contains(got.Reason, "are not undone") {
+			t.Errorf("auto reason doesn't say data changes stay: %s", got.Reason)
+		}
+	}
 }

@@ -60,7 +60,7 @@ func (s Settings) TooNew(u discover.ImageUpdate) (bool, string) {
 	if age >= s.MinReleaseAge {
 		return false, ""
 	}
-	return true, fmt.Sprintf("Released %s ago; waits until it's %s old, so a bad release has time to be noticed and pulled.", humanAge(age), humanAge(s.MinReleaseAge))
+	return true, fmt.Sprintf("First seen by this agent %s ago; waits until it has been out for %s, so a bad release has time to be noticed and pulled. Tags that are rebuilt more often than that wait until a build stays.", humanAge(age), humanAge(s.MinReleaseAge))
 }
 
 func humanAge(d time.Duration) string {
@@ -326,7 +326,7 @@ func kernelItem(in Input, pkgs []collect.AptUpgrade, held map[string]bool) (prot
 		it.Reason = fmt.Sprintf("The new kernel comes from a package source outside %s (%s), so it waits for a supervised run.", osName(in.System), kernelThirdParty(in.System, pkgs))
 	default:
 		it.Decision = protocol.Auto
-		it.Reason = "New kernel, installed and then booted once inside the maintenance window. If it doesn't come up, the server falls back to the current kernel."
+		it.Reason = "New kernel. Automatic runs install it; it's used from the next reboot, which this version leaves to you."
 	}
 	return it, true
 }
@@ -390,7 +390,7 @@ func dockerItems(in Input, dockerApt []collect.AptUpgrade, held map[string]bool,
 			it.Reason = noteReason(n, "Docker "+to)
 		case change == versions.Patch:
 			it.Decision = protocol.Auto
-			it.Reason = fmt.Sprintf("Patch release within Docker %d.%d. Containers restart; if any don't come back, upkeeper.sh reinstalls %s.", cur.Nums[0], minorOf(cur), d.EngineVersion)
+			it.Reason = fmt.Sprintf("Patch release within Docker %d.%d. This version doesn't update Docker Engine yet; it's shown so you can plan for it.", cur.Nums[0], minorOf(cur))
 		default:
 			it.Decision = protocol.Flagged
 			it.Reason = fmt.Sprintf("Docker %s → %s is a %s upgrade. Upgrades like this have broken working setups before, so it waits for a supervised run.", d.EngineVersion, to, change)
@@ -417,7 +417,7 @@ func dockerItems(in Input, dockerApt []collect.AptUpgrade, held map[string]bool,
 				if engineHeld {
 					it.Decision, it.Reason = protocol.Never, "Docker is held with apt-mark hold, so upkeeper.sh leaves it alone."
 				} else {
-					it.Decision, it.Reason = protocol.Auto, "New package build of the same Docker version. Containers restart; if any don't come back, upkeeper.sh reinstalls the current build."
+					it.Decision, it.Reason = protocol.Auto, "New package build of the same Docker version. This version doesn't update Docker Engine yet; it's shown so you can plan for it."
 				}
 				items = append(items, it)
 			} else {
@@ -567,9 +567,15 @@ func imageItems(in Input, note func(protocol.Layer, string, string) ReleaseNote)
 		case stateful && u.Change == versions.Minor:
 			it.Decision = protocol.Flagged
 			it.Reason = fmt.Sprintf("%s → %s is a minor release of a service that keeps data (%s). A minor release can change how data is stored, and putting the old image back can't undo that, so it waits for a supervised run.", u.FromTag, u.ToTag, why)
+		case hostData && f.Policy != "auto-minor" && u.Change == versions.Minor:
+			it.Decision = protocol.Flagged
+			it.Reason = fmt.Sprintf("%s → %s is a minor release of a service that writes data on the host (%s). A new version may change that data when it starts, and putting the old image back can't undo that, so it waits for a supervised run. Label the service upkeeper.policy=auto-minor to allow minor releases automatically.", u.FromTag, u.ToTag, strings.Join(s.HostPathMounts, ", "))
 		case stateful && u.NewDigest && floatsOverMinors(f.Ref.Repo, u.FromTag):
 			it.Decision = protocol.Flagged
 			it.Reason = fmt.Sprintf("A new image under %s may be a newer minor or major release of a service that keeps data (%s). Putting the old image back can't undo a data migration, so it waits for a supervised run. Pin a version tag to get automatic patch updates.", u.FromTag, why)
+		case hostData && f.Policy != "auto-minor" && u.NewDigest && floatsOverMinors(f.Ref.Repo, u.FromTag):
+			it.Decision = protocol.Flagged
+			it.Reason = fmt.Sprintf("A new image under %s may be a newer minor or major release, and this service writes data on the host (%s). Putting the old image back can't undo changes a new version makes to that data, so it waits for a supervised run. Pin a version tag to get automatic patch updates, or label the service upkeeper.policy=auto-minor.", u.FromTag, strings.Join(s.HostPathMounts, ", "))
 		case u.NewDigest:
 			it.Decision = protocol.Auto
 			it.Reason = fmt.Sprintf("New image published under the same tag (%s). Pulled in the weekly run; if the service doesn't come back healthy, the previous image is put back.", u.FromTag)
@@ -584,6 +590,9 @@ func imageItems(in Input, note func(protocol.Layer, string, string) ReleaseNote)
 		default:
 			it.Decision = protocol.Auto
 			it.Reason = fmt.Sprintf("%s release (%s → %s). Pulled in the weekly run; if the service doesn't come back healthy, the previous image is put back.", capitalize(u.Change.String()), u.FromTag, u.ToTag)
+		}
+		if it.Decision == protocol.Auto && hostData {
+			it.Reason += " Changes the new version makes to its data while it runs are not undone."
 		}
 		if it.Decision == protocol.Auto {
 			if young, why := in.Settings.TooNew(u); young {

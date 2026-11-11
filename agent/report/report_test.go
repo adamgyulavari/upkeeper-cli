@@ -110,7 +110,7 @@ func TestCollectUbuntuEndToEnd(t *testing.T) {
 		"docker docker-ce 29.1.2":             protocol.Flagged,
 		"docker containerd.io 1.7.24-1":       protocol.Auto,
 		"docker docker-compose-plugin 2.31.0": protocol.Auto,
-		"image immich/immich-server v1.120.2": protocol.Auto,
+		"image immich/immich-server v1.120.2": protocol.Flagged, // minor, writes data on the host
 		"image immich/immich-server v2.0.1":   protocol.Flagged,
 		"image immich/database ":              protocol.Never,
 		"image immich/redis 7.4-alpine":       protocol.Flagged,

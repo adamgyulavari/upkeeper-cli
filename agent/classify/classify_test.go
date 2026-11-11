@@ -103,7 +103,7 @@ func TestScopeRows(t *testing.T) {
 				)
 				return in
 			},
-			want: []want{{protocol.LayerKernel, "kernel", "6.8.0-50-generic", protocol.Auto, "falls back to the current kernel", true}},
+			want: []want{{protocol.LayerKernel, "kernel", "6.8.0-50-generic", protocol.Auto, "used from the next reboot", true}},
 		},
 		{
 			row: "kernel reboot set to supervised per server → flagged",
@@ -118,7 +118,7 @@ func TestScopeRows(t *testing.T) {
 		{
 			row:  "Docker Engine patch release → auto with L2",
 			in:   func() Input { return withDocker(base(), "28.3.1", "28.3.2", "28.3.2") },
-			want: []want{{protocol.LayerDocker, "docker-ce", "28.3.2", protocol.Auto, "reinstalls 28.3.1", false}},
+			want: []want{{protocol.LayerDocker, "docker-ce", "28.3.2", protocol.Auto, "doesn't update Docker Engine yet", false}},
 		},
 		{
 			row:  "Docker Engine minor → flagged",

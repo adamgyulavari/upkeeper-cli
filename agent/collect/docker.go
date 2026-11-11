@@ -20,8 +20,9 @@ import (
 // Compose project names can't contain parentheses, so it can't collide.
 const StandaloneProject = "(standalone)"
 
-// PolicyLabel lets a user mark a service: "pin" (never update) or
-// "supervised" (always flag). It can only make the agent more cautious.
+// PolicyLabel lets a user mark a service: "pin" (never update),
+// "supervised" (always flag), or "auto-minor" (allow minor releases of a
+// service that writes data on the host; database images stay flagged).
 const PolicyLabel = "upkeeper.policy"
 
 // ServiceFacts are per-service details for the classifier.
