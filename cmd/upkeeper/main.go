@@ -400,6 +400,7 @@ func collector(g globals) *report.Collector {
 	c := report.Default(version, g.cacheDir)
 	c.Settings.MinReleaseAge = minReleaseAge(nil)
 	c.Policy = func() *protocol.Policy { return policyReport(g) }
+	c.ExtraRisks = func() []protocol.Risk { return (&runengine.Memory{Dir: g.stateDir}).Risks(time.Now()) }
 	return c
 }
 

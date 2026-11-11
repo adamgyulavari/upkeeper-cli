@@ -83,6 +83,7 @@ func (l *Loop) dir() string {
 func (l *Loop) Run(ctx context.Context) {
 	if res := l.Engine.Recover(); res != nil {
 		l.logf("found a run that was cut off (job %s); the server is frozen and the result will be reported.", res.JobID)
+		l.recordRecovered(*res)
 		l.queue(*res)
 	}
 	if len(l.Roots) == 0 {
@@ -212,6 +213,28 @@ func (l *Loop) Handle(ctx context.Context, sj protocol.SignedJob) {
 	}
 	l.logf("job %s: %s. %s", job.ID, res.Outcome, res.Summary)
 	l.queue(res)
+}
+
+// recordRecovered stores a cut-off run's result with its job, so a
+// redelivery of that job resends it instead of replacing it with
+// "already started".
+func (l *Loop) recordRecovered(res protocol.RunResult) {
+	if res.JobID == "" {
+		return
+	}
+	seen, err := loadSeen(l.dir())
+	if err != nil {
+		return
+	}
+	e := seen.Jobs[res.JobID]
+	if e == nil {
+		e = &seenJob{ExpiresAt: l.now().Add(protocol.MaxJobLifetime)}
+		seen.Jobs[res.JobID] = e
+	}
+	e.Result = &res
+	if err := saveSeen(l.dir(), seen); err != nil {
+		l.logf("couldn't record the cut-off run's result: %v", err)
+	}
 }
 
 func (l *Loop) reject(peek protocol.Job, now time.Time, reason string) {

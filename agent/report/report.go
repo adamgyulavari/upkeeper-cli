@@ -34,6 +34,9 @@ type Collector struct {
 	Cache *registry.Cache
 	// Policy, if set, fills Report.Policy (protocol 2).
 	Policy func() *protocol.Policy
+	// ExtraRisks, if set, adds risks found by earlier runs (protocol 2),
+	// such as a project whose compose files don't match what's running.
+	ExtraRisks func() []protocol.Risk
 }
 
 // Default builds a Collector for the real host.
@@ -146,6 +149,9 @@ func (c *Collector) Plan(ctx context.Context) (protocol.Report, classify.Input) 
 	}
 	if c.Policy != nil {
 		r.Policy = c.Policy()
+	}
+	if c.ExtraRisks != nil {
+		r.Risks = append(r.Risks, c.ExtraRisks()...)
 	}
 	return r, in
 }

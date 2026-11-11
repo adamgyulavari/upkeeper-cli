@@ -208,3 +208,28 @@ func TestEventsRetry(t *testing.T) {
 		t.Errorf("results %+v", rs)
 	}
 }
+
+// M-05: a cut-off run's result survives a redelivery of the same job.
+func TestRecoveredResultIsNotReplaced(t *testing.T) {
+	e := newEnv(t)
+	// The job was admitted (seen) and then the agent died during it.
+	seen, _ := loadSeen(e.loop.StateDir)
+	seen.Jobs["job_7"] = &seenJob{ExpiresAt: e.now.Add(time.Hour)}
+	saveSeen(e.loop.StateDir, seen)
+	e.eng.recover = &protocol.RunResult{JobID: "job_7", Outcome: protocol.OutcomeStopped, Frozen: true, Summary: "Stopped: cut off."}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	e.loop.Run(ctx) // recovers, then stops at once
+	e.cloud.AddJob(e.signer.Sign(e.job("job_7")))
+	if err := e.loop.Once(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	e.loop.deliver(context.Background())
+	rs := e.cloud.RunResults("job_7")
+	if len(rs) == 0 || rs[len(rs)-1].Outcome != protocol.OutcomeStopped || !rs[len(rs)-1].Frozen {
+		t.Fatalf("results %+v", rs)
+	}
+	if len(e.eng.ran) != 0 {
+		t.Errorf("ran again: %v", e.eng.ran)
+	}
+}
