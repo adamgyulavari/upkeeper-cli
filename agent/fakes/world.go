@@ -47,19 +47,19 @@ type World struct {
 	// ImageLabels: image ID → labels the image sets.
 	ImageLabels map[string]map[string]string
 
-	Apt            []collect.AptUpgrade
-	AptUpdateErr   error
-	AptInstallErr  error
+	Apt           []collect.AptUpgrade
+	AptUpdateErr  error
+	AptInstallErr error
 	// AptInstallChanges: with AptInstallErr, dpkg got halfway (the
 	// packages are left half-configured).
 	AptInstallChanges bool
-	AptGone        map[string]bool // package → planned version vanished after apt-get update
-	AptSimExtra    []string        // extra lines in the install simulation
-	Held           []string
-	Updates        []discover.ImageUpdate
-	FreeMB         uint64
-	FailedUnits    []string
-	ComposeVersion string
+	AptGone           map[string]bool // package → planned version vanished after apt-get update
+	AptSimExtra       []string        // extra lines in the install simulation
+	Held              []string
+	Updates           []discover.ImageUpdate
+	FreeMB            uint64
+	FailedUnits       []string
+	ComposeVersion    string
 	// Installed is package → installed version (dpkg-query); filled from
 	// Apt's From when a package isn't listed.
 	Installed map[string]string
