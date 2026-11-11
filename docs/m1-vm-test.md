@@ -91,6 +91,48 @@ ls -ld /opt /opt/demo /opt/demo/compose.yml   # root-owned, not group/world-writ
 
 The agent refuses projects whose compose files aren't root-owned or are writable by group or others, so keep the default modes.
 
+## 3a. Check the assumptions first
+
+The agent relies on how apt, systemd, Docker and Compose behave on a real server. Run these nine checks on the VM before installing the agent (steps 1, 6 and 7 need it installed; do those parts during sections 6 and 7). Each has an expected result; if one doesn't match, stop and report it.
+
+Some were already checked with Docker 29.9.2 and Compose 5.6.1 on Ubuntu 24.04 during development (marked "seen locally"); repeat them here anyway, since your versions differ.
+
+1. **apt and kernel scripts work under the agent's unit.**
+   Before installing the agent: `systemd-run --wait --pipe -p ReadOnlyPaths=/etc/upkeeper grub-probe --target=fs_uuid /` and `systemd-run --wait --pipe blkid`.
+   **Expect** a UUID and the block devices, no "Permission denied" or "cannot open".
+   During section 6, with a kernel update in the plan: **expect** `dpkg --audit` to print nothing, `journalctl -k | grep -i oom` to show nothing new, and `systemctl show upkeeper -p DevicePolicy -p MemoryMax` to show `DevicePolicy=auto` and `MemoryMax=infinity`. Repeat once on **Ubuntu 22.04**.
+
+2. **Compose reproduces the project, or the agent skips it.**
+   Start three extra projects: one with `FOO=bar docker compose up -d` where `${FOO}` is used in `environment:`; one with `docker compose up -d --scale web=2`; one started from the parent directory with `-f sub/compose.yml`. Then edit `/opt/demo/compose.yml` (add an environment variable) without running `up`.
+   **Expect** in the next run's record: the first skipped with "use variables that aren't set … (FOO)", the second with "runs 2 containers, but its compose files ask for 1", the edited one with "The compose files on disk no longer match what's running", each with code `compose_mismatch`, and the dashboard showing the risk. `docker inspect` of those containers is unchanged (same IDs). Revert the edit and run `docker compose up -d`; the next run updates the project again.
+
+3. **`docker compose config --hash` equals the container label** (seen locally).
+   `docker compose -p demo -f /opt/demo/compose.yml config --hash web` and `docker inspect demo-web-1 -f '{{index .Config.Labels "com.docker.compose.config-hash"}}'`.
+   **Expect** the same value. With a `.env` in `/opt/demo`, again the same. If they differ on a fresh, untouched project, every project is skipped: report the Compose version.
+
+4. **The port probe goes to the container** (docker-proxy accepting with nothing listening was seen locally).
+   `docker run -d --name probe -p 5555:5555 busybox sleep 1d`; `nc -vz 127.0.0.1 5555` (**expect** "succeeded": that's docker-proxy) and `nc -vz $(docker inspect probe -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}') 5555` (**expect** "refused"). `docker rm -f probe`.
+
+5. **Labels after the agent's `up`.**
+   After section 6: `docker inspect demo-cache-1 -f '{{index .Config.Labels "com.docker.compose.project.config_files"}}'`.
+   **Expect** `/opt/demo/compose.yml,/opt/demo/compose.override.upkeeper.yml`, and `demo-web-1` lists only `compose.yml`. A second run with another update to `demo` must not skip it as "disagree about the project's directory or compose files".
+
+6. **Recreate keeps anonymous volumes and leaves other services alone** (anonymous volumes seen locally).
+   Add a service `pg: {image: postgres:16.4, environment: {POSTGRES_PASSWORD: x}}` with no `volumes:`, `docker compose up -d`, then `docker compose exec pg psql -U postgres -c 'create table t(x int); insert into t values (1)'`. Let a patch update of `pg` run (or tag an older 16.x to force one).
+   **Expect** `select * from t` still returns 1 after the update and after an undo, and `demo-web-1` keeps its container ID.
+
+7. **Pull by digest and tag back, on both image stores.**
+   During section 6, on the default store of your Docker version, then again with `"features": {"containerd-snapshotter": true}` (or `false`) in `/etc/docker/daemon.json` and a Docker restart.
+   **Expect** `docker image inspect ghcr.io/<you>/upk-demo@sha256:<digest>` to work after the pull, the web container to run exactly that image ID, and after the undo `docker image inspect ghcr.io/<you>/upk-demo:1.0.0 -f '{{.Id}}'` to equal the ID it ran before.
+
+8. **A failed `up` can be put back.**
+   Push a third tag whose `HEALTHCHECK` refers to a missing binary, or publish a port that's already taken on the host, and let a run update to it.
+   **Expect** the run to end `undone`, `docker ps -a` to show no leftover `<hash>_demo-web-1` containers, and the web container running the previous image.
+
+9. **apt keeps marks, config files and holds.**
+   Before section 6: `apt-mark showauto > /root/auto-before`; edit `/etc/ssh/sshd_config` (add a comment) if an openssh update is pending; `apt-mark hold` one dependency of a pending package.
+   **Expect** after the run: `diff <(apt-mark showauto) /root/auto-before` shows no package moving from auto to manual (if it does, note which: the agent installs with `pkg=version`); your `sshd_config` edit is still there and no prompt blocked the run; the held package is unchanged, and the package that needs it is skipped with apt's reason rather than half-installed.
+
 ## 4. Install and enroll
 
 There's no signed release of M1 yet, so copy the development build by hand:
@@ -156,7 +198,7 @@ Press "Run now" again (the scheduler's job works too, inside the window).
 
 ```sh
 cd /opt/demo
-cat compose.override.upkeeper.yml   # only cache: image "redis:7.4.x@sha256:…"; no web entry
+cat compose.override.upkeeper.yml   # only cache: image "redis:7.4.x"; no web entry
 docker compose -f compose.yml -f compose.override.upkeeper.yml ps   # web on 1.0.0 and healthy
 curl -s localhost:8080               # ok
 cat compose.yml                      # unchanged: still web 1.0.0, cache 7.4.1
@@ -195,7 +237,12 @@ If apt was killed halfway, `dpkg --audit` lists half-configured packages; `dpkg 
 - `upkeeper policy window "sun 03:00-05:00"` on a weekday, then "Run now": rejected, "outside this server's local maintenance window".
 - `chmod g+w /opt/demo/compose.yml`, then a run with an image update: the project is skipped with "Can't verify where this project's compose file lives (… writable by group or others …)". Undo with `chmod g-w`.
 - `upkeeper policy set dry-run` with an auto job: it runs as a dry run.
-- `systemctl stop docker` during the dry run: the final check reports Docker isn't answering (dry runs don't freeze).
+- `systemctl stop docker`, then "Run now": the run is rejected at pre-flight, "Docker is installed but isn't answering … Nothing was changed."
+- `systemctl list-timers apt-daily*` during an auto run: both timers are stopped while the OS step runs and listed again afterwards.
+- Start `apt-get install -y sl` in another shell just before the OS step: the agent waits for the lock (up to two minutes) and either goes on or skips the OS updates with "Another program kept apt busy … Nothing was installed". It doesn't freeze.
+- `systemctl restart upkeeper` during the apt step (not `kill -KILL`): apt finishes (`dpkg --audit` is clean), and the run is recorded as stopped and the server frozen.
+- `docker compose stop cache`, then a run with a cache update: cache stays stopped, and the item is skipped with "It wasn't running when the run started".
+- Run the installer again (as an upgrade) while a run is in progress: it stops with "a maintenance run is in progress … Nothing was changed."
 
 ## 9. Uninstall
 
