@@ -43,7 +43,7 @@ func Risks(in Input) []protocol.Risk {
 
 	if sys.OSID != "" && !sys.Supported {
 		add(RiskOSUnsupported, protocol.Problem, osName(sys),
-			fmt.Sprintf("upkeeper.sh supports Ubuntu 22.04 and 24.04 and Debian 12 and 13. %s gets this report, but no automatic runs.", osName(sys)))
+			fmt.Sprintf("upkeeper.sh supports Ubuntu 22.04 and 24.04 and Debian 12 and 13. %s isn't supported yet: it gets this report, but no automatic runs.", osName(sys)))
 	}
 
 	if sys.RebootRequired {

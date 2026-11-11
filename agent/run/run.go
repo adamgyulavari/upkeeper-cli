@@ -462,7 +462,7 @@ func (r *runner) plan() (osItems, imgItems []planned, reject string) {
 	r.ev(protocol.StepPlan, protocol.StepStart, "Planning: looking for updates again on this server.")
 	r.report, r.in = r.e.Planner.Plan(r.ctx)
 	if r.report.System.OSID != "" && !r.report.System.Supported {
-		return nil, nil, fmt.Sprintf("%s %s isn't supported for automatic runs.", r.report.System.OSID, r.report.System.OSVersion)
+		return nil, nil, fmt.Sprintf("%s %s isn't supported for automatic runs yet (supported: Ubuntu 22.04 and 24.04, Debian 12 and 13). Nothing was changed.", r.report.System.OSID, r.report.System.OSVersion)
 	}
 	if r.report.Docker.Installed && !r.before.DockerOK {
 		r.ev(protocol.StepPlan, protocol.StepFail, "Docker isn't answering ("+r.before.DockerErr+").")
