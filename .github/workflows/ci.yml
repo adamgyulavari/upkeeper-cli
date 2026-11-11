@@ -1,8 +1,9 @@
 name: CI
 on:
   push:
-    branches: [main]
+    branches: [main, m1]
   pull_request:
+  workflow_dispatch:
 permissions:
   contents: read
 jobs:
@@ -16,5 +17,31 @@ jobs:
       - name: gofmt
         run: test -z "$(gofmt -l .)" || (gofmt -l . && exit 1)
       - run: go vet ./...
+      - run: go vet -tags integration ./...
       - run: go test ./...
+      - run: go test -race ./...
       - run: make build
+
+  # Real Docker Engine and Compose (the runner has both): image update and
+  # undo with a crash-looping image, the config-hash check, a stopped
+  # service, anonymous volumes, the override round trip, pull by digest,
+  # and the port probe. Nothing here runs apt, so the runner's packages
+  # don't change.
+  docker-integration:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Docker and Compose versions
+        run: docker version && docker compose version
+      - name: Integration tests
+        run: go test -tags integration -count=1 -v -run Integration ./agent/run/ ./agent/verify/
+        env:
+          UPK_IT_BASE: mirror.gcr.io/library/busybox:1.36
+          UPK_IT_REGISTRY_IMAGE: mirror.gcr.io/library/registry:2
+      - name: Clean up
+        if: always()
+        run: docker rm -f upk-it-registry || true
