@@ -567,6 +567,9 @@ func imageItems(in Input, note func(protocol.Layer, string, string) ReleaseNote)
 		case stateful && u.Change == versions.Minor:
 			it.Decision = protocol.Flagged
 			it.Reason = fmt.Sprintf("%s → %s is a minor release of a service that keeps data (%s). A minor release can change how data is stored, and putting the old image back can't undo that, so it waits for a supervised run.", u.FromTag, u.ToTag, why)
+		case u.Change == versions.Minor && minorIsMajor(f.Ref.Repo, u.FromTag):
+			it.Decision = protocol.Flagged
+			it.Reason = fmt.Sprintf("%s → %s. For this image the second number is a new release line (a distribution or language version), not a small step, so it waits for a supervised run.", u.FromTag, u.ToTag)
 		case hostData && f.Policy != "auto-minor" && u.Change == versions.Minor:
 			it.Decision = protocol.Flagged
 			it.Reason = fmt.Sprintf("%s → %s is a minor release of a service that writes data on the host (%s). A new version may change that data when it starts, and putting the old image back can't undo that, so it waits for a supervised run. Label the service upkeeper.policy=auto-minor to allow minor releases automatically.", u.FromTag, u.ToTag, strings.Join(s.HostPathMounts, ", "))
@@ -602,6 +605,24 @@ func imageItems(in Input, note func(protocol.Layer, string, string) ReleaseNote)
 		items = append(items, it)
 	}
 	return items
+}
+
+// releaseLineImages version their releases as major.minor where the minor
+// is a new release line: distributions and language runtimes.
+var releaseLineImages = map[string]bool{
+	"alpine": true, "ubuntu": true, "debian": true, "fedora": true, "python": true, "node": true,
+	"php": true, "golang": true, "ruby": true, "openjdk": true, "eclipse-temurin": true, "perl": true,
+}
+
+// minorIsMajor reports whether a "minor" update is really a new release
+// line: images in releaseLineImages, and tags with only two numbers
+// (2024.10 → 2024.11, 3.20 → 3.21), where nothing marks a patch.
+func minorIsMajor(repo, from string) bool {
+	if releaseLineImages[repo[strings.LastIndex(repo, "/")+1:]] {
+		return true
+	}
+	t, ok := versions.ParseTag(from)
+	return ok && len(t.Nums) == 2
 }
 
 // floatsOverMinors reports whether a tag can move to a newer minor release:

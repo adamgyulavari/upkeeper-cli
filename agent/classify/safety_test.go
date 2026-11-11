@@ -174,3 +174,24 @@ func TestDataMountsLimitAutoToPatches(t *testing.T) {
 		}
 	}
 }
+
+// Minor on tags that aren't semver-like is a new release line.
+func TestMinorThatIsAReleaseLine(t *testing.T) {
+	cases := []struct {
+		image, from, to string
+		want            protocol.Decision
+	}{
+		{"alpine:3.20", "3.20", "3.21", protocol.Flagged},
+		{"python:3.11.9", "3.11.9", "3.13.0", protocol.Flagged},
+		{"acme/app:2024.10", "2024.10", "2024.11", protocol.Flagged},
+		{"traefik:v2.10.7", "v2.10.7", "v2.11.0", protocol.Auto},
+	}
+	for _, tc := range cases {
+		items := Items(withService(base(), tc.image, nil, "", discover.ImageUpdate{FromTag: tc.from, ToTag: tc.to, Change: versions.Minor}))
+		for _, it := range items {
+			if it.Layer == protocol.LayerImage && it.Decision != tc.want {
+				t.Errorf("%s %s→%s: %s %s", tc.image, tc.from, tc.to, it.Decision, it.Reason)
+			}
+		}
+	}
+}
