@@ -2,7 +2,7 @@
 # The workflow creates the tag v<VERSION> itself; if that release already
 # exists, it does nothing. A draft is not "latest", so installers don't see
 # it until the founder signs checksums.txt offline, uploads
-# checksums.txt.sig and publishes it (docs/RELEASING.md). deploy/install.sh
+# checksums.txt.sig and publishes it (the maintainer's release notes). deploy/install.sh
 # refuses releases without a valid signature.
 name: Release
 on:

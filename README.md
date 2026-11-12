@@ -167,7 +167,7 @@ agent/               collectors, discovery, classifier, report loop,
                      policy, job client (jobs), run engine (run), health check (verify)
 protocol/            the wire contract with the control plane (imported by it)
 deploy/              install.sh and the systemd unit
-docs/                release steps, the real-VM test plan
+docs/                the real-VM test plan
 ```
 
 ## Develop
@@ -178,7 +178,7 @@ make build      # static linux/amd64 and linux/arm64 binaries + checksums in bin
 make build-dev  # also trusts the TEST root; for local testing only
 ```
 
-Releases: bump `VERSION` on `main`; the Release workflow builds a draft, which is signed offline and then published ([docs/RELEASING.md](docs/RELEASING.md)).
+Releases: bump `VERSION` on `main`; the Release workflow builds a draft, which is signed offline and then published.
 
 ## License
 

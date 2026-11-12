@@ -10,30 +10,46 @@ What it proves:
 4. A run cut off halfway freezes the server, and `upkeeper unfreeze` lifts it.
 5. Uninstall leaves nothing behind but the override file.
 
-You need: a Hetzner Cloud account, a GitHub account with a **public** GHCR package you can push to, and the control plane from the `m1-cloud` branch running somewhere the VM can reach over HTTPS.
+You need: an account with any VPS provider (the steps below use a DigitalOcean droplet; Hetzner, Vultr or anything else with Ubuntu images works the same, since upkeeper never talks to the provider), a GitHub account with a **public** GHCR package you can push to, and a control plane (M1) the VM can reach over HTTPS.
+
+There are two parts:
+
+- **Part A, a throwaway VM** (sections 1 to 9): the image update, the deliberately broken image, undo, freeze and uninstall. A fresh VM has few pending OS updates, so it says little about the OS step.
+- **Part B, a staging server you can afford to break** (section 10): a real backlog of OS updates. Do it after part A, with a snapshot or backup taken first.
 
 ## 0. Keys and builds (on your laptop)
 
-This test uses a **development build** of the agent: it trusts the public TEST root key and accepts `UPKEEPER_DEV_MIN_RELEASE_AGE`, so a freshly pushed image doesn't have to wait 3 days. Never install a development build on a real server.
+Jobs are signed. The agent only accepts a job whose key carries a certificate from a root key built into the agent binary. So you need a root key, an online key certified by it, and agent builds that trust that root.
 
 ```sh
 cd upkeeper-cli && git checkout m1
-make build-dev keys                     # bin/upkeeper_dev_linux_amd64, bin/upkeeper-keys
-bin/upkeeper-keys gen-online -id vmtest-1 -out online.key
-bin/upkeeper-keys sign-cert -test-root -key-id vmtest-1 -pub <public key printed above> -days 7 > cert.json
+make keys                                        # bin/upkeeper-keys
+bin/upkeeper-keys gen-root -id root-2026 -out root.key      # keep root.key off every server
+# prints: Build agents with: ROOT_KEYS=root-2026:<base64>
+bin/upkeeper-keys gen-online -id online-1 -out online.key   # prints the public key
+bin/upkeeper-keys sign-cert -root root.key -root-id root-2026 -key-id online-1 -pub <public key printed above> -days 14 > cert.json
 ```
 
-Configure the control plane with the online key and its certificate:
+Set these on the control plane and redeploy it:
 
-- `JOB_SIGNING_KEY` = content of `online.key` (base64 seed)
-- `JOB_KEY_ID` = `vmtest-1`
+- `JOB_SIGNING_KEY` = content of `online.key`
 - `JOB_KEY_CERT` = content of `cert.json`
+- `JOB_ROOT_KEYS` = `root-2026:<base64>` (the value printed by `gen-root`)
 
-The control plane must send the certificate in `SignedJob.cert` with every job. Without it every job is refused with "isn't signed with a key this agent trusts".
+A control plane that isn't running in development mode refuses certificates from the public TEST root, so use your own root key as above.
+
+Build two agents, both trusting your root:
+
+```sh
+make build-dev ROOT_KEYS=root-2026:<base64>   # bin/upkeeper_dev_linux_amd64: for the throwaway VM only
+make build     ROOT_KEYS=root-2026:<base64>   # bin/upkeeper_linux_amd64: for the staging server
+```
+
+The **development build** also accepts `UPKEEPER_DEV_MIN_RELEASE_AGE`, so a freshly pushed test image doesn't have to wait 3 days, and it also trusts the public TEST root. Never install it on a server you care about; delete the throwaway VM when you're done.
 
 ## 1. The VM
 
-1. Create a Hetzner **CX22**, **Ubuntu 24.04**, with your SSH key. Name it `upk-m1-test`.
+1. Create a VM with **Ubuntu 24.04**, 2 GB RAM or more, and your SSH key. On DigitalOcean: Create → Droplets → Ubuntu 24.04 (LTS) x64 → Basic, Regular, 2 GB / 1 CPU. Name it `upk-m1-test`. (The checks in section 3a also ask for a second run on Ubuntu 22.04; create that droplet when you get there.)
 2. Log in and update nothing yet (we want pending updates):
 
    ```sh
@@ -157,11 +173,11 @@ systemctl daemon-reload && systemctl enable --now upkeeper
 journalctl -u upkeeper -f
 ```
 
-**Expect** in the log: `Local policy: observe`, `Trusted root keys: TEST-ROOT-DO-NOT-USE`, a warning that this is a development build, and `report sent` lines.
+**Expect** in the log: `Local policy: observe`, `Trusted root keys:` listing `root-2026` and `TEST-ROOT-DO-NOT-USE`, a warning that this is a development build, and `report sent` lines.
 
 **Check:**
 
-- `upkeeper status`: mode observe, not frozen, the TEST root, "no job has arrived yet".
+- `upkeeper status`: mode observe, not frozen, your root key and the TEST root, "no job has arrived yet".
 - Dashboard: the server shows OS updates (auto), `demo/cache` 7.4.1 → 7.4.x (auto), `demo/web` 1.0.0 → 1.0.1 (auto), redis 8 (flagged, major), and "Local policy: observe".
 - Switch on "Automatic runs" and press "Run now". **Expect** the run to be **rejected**: "the local policy on this server is observe …" (or the dashboard doesn't offer runs while it shows observe). Nothing changed (`ls /opt/demo` shows no override file).
 
@@ -253,7 +269,40 @@ rm -rf /etc/upkeeper /var/lib/upkeeper /var/cache/upkeeper
 systemctl daemon-reload
 ```
 
-`/opt/demo/compose.override.upkeeper.yml` stays. Then delete the VM in the Hetzner console and remove the server in the dashboard.
+`/opt/demo/compose.override.upkeeper.yml` stays. Then delete the VM at your provider and remove the server in the dashboard.
+
+## 10. Part B: a staging server with a real backlog
+
+Do this only after part A went as expected, on a server you can afford to break, with a provider snapshot or backup taken first.
+
+What it adds: an OS step with many pending packages (a fresh VM has few), on a server with real services. On a Dokku or other non-Compose host, upkeeper updates OS packages only: containers outside a Compose project are left alone and listed as skipped with that reason.
+
+1. Take a snapshot or backup at your provider.
+2. Install the **regular** build (not the development build):
+
+   ```sh
+   # laptop
+   scp bin/upkeeper_linux_amd64 root@<staging>:/usr/local/bin/upkeeper.new
+   scp deploy/upkeeper.service root@<staging>:/etc/systemd/system/upkeeper.service
+   # staging
+   systemctl stop upkeeper
+   install -m 0755 /usr/local/bin/upkeeper.new /usr/local/bin/upkeeper && rm /usr/local/bin/upkeeper.new
+   install -d -m 0700 /var/lib/upkeeper
+   systemctl daemon-reload && systemctl start upkeeper
+   upkeeper status        # mode observe, your root key only (no TEST root)
+   ```
+
+   The server keeps its enrollment (`/etc/upkeeper/agent.json`).
+3. `upkeeper policy set dry-run`, switch on "Automatic runs" for the server in the dashboard, press "Run now". **Expect** a dry run that lists the OS packages it would upgrade and skips everything else with a reason. `apt list --upgradable | wc -l` is unchanged.
+4. `upkeeper policy set auto`, "Run now" again (at most one full run per 20 hours; the first run after switching to auto is a dry run, so this is the second day at the earliest).
+   **Expect:**
+   - the pending packages installed, except held ones, Docker's packages and anything from a third-party repository;
+   - the kernel installed but **no reboot**;
+   - the same containers running afterwards as before;
+   - the run ends `done` or `partial`, with reasons for what was skipped.
+5. Afterwards: `dpkg --audit` prints nothing, `systemctl --failed` shows nothing new, `systemctl is-active apt-daily.timer apt-daily-upgrade.timer` says active, and the apps answer.
+
+If anything looks wrong: `upkeeper policy set observe` stops further runs at once, and `journalctl -u upkeeper` plus the run record show what happened.
 
 ## What to send back
 
